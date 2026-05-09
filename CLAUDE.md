@@ -1,287 +1,242 @@
 # CLAUDE.md
 
-## General Workflow
+Scoped instructions for Claude Code working in this repo. Read this first.
+For deep context, follow the pointers at the bottom.
 
-When a task involves multiple steps (e.g., implement + commit + PR), complete ALL steps in sequence without stopping. If creating a branch, committing, and opening a PR, finish the entire chain.
+## General workflow
 
-Always commit after every turn. Don't wait for the user to ask — if you made changes, commit them before responding. Do not ask "shall I commit?" or "want me to commit?" — just commit. Committing is not a destructive or risky action; it is the expected default after every change.
+When a task involves multiple steps (implement + commit + PR), complete the
+full chain without stopping. If you create a branch, commit, and open a PR,
+finish all of it.
 
-PR descriptions should be concise and changelog-oriented: what changed, why, and how to use it. Do not include test plans, design decisions, or implementation details — those belong in specs and commit messages.
+Always commit after every turn. Don't ask "shall I commit?" — just commit.
+Committing is the expected default after every change.
 
-## Project Overview
+PR descriptions are concise and changelog-oriented: what changed, why, how to
+use it. No test plans, no design rationale, no implementation details — those
+belong in commit messages and specs.
 
-msgvault is an offline Gmail archive tool that exports and stores email data locally with full-text search capabilities. The goal is to archive 20+ years of Gmail data from multiple accounts, make it searchable, and eventually delete emails from Gmail once safely archived.
+## Project overview
 
-## Architecture (Go)
+msgvault is an offline message-archive tool. Single Go binary (CGO required),
+SQLite system of record, optional Parquet+DuckDB analytics cache, optional
+sqlite-vec vector search. Three faces: CLI (~58 Cobra commands), TUI
+(Bubble Tea), and a `serve` daemon (chi HTTP + mark3labs MCP + cron
+scheduler).
 
-Single-binary Go application:
+Ingests from many sources beyond Gmail: IMAP, Microsoft O365 (via IMAP),
+MBOX, Apple Mail .emlx, Outlook PST, plus chat formats (iMessage, WhatsApp,
+Facebook Messenger DYI, Google Voice).
+
+Read **`docs/ARCHITECTURE.md`** for the full system map.
+
+## Layout
 
 ```
-msgvault/
-├── cmd/msgvault/            # CLI entrypoint
-│   └── cmd/                 # Cobra commands
-├── internal/                # Core packages
-│   ├── tui/                 # Bubble Tea TUI
-│   ├── query/               # DuckDB query engine over Parquet
-│   ├── store/               # SQLite database access
-│   ├── deletion/            # Deletion staging and manifest
-│   ├── gmail/               # Gmail API client
-│   ├── sync/                # Sync orchestration
-│   ├── oauth/               # OAuth2 flows (browser + device)
-│   └── mime/                # MIME parsing
-│
-├── go.mod                   # Go module
-└── Makefile                 # Build targets
+cmd/msgvault/cmd/             Cobra CLI (~58 commands; see docs/subsystems/cli.md)
+internal/
+├── api/                      chi HTTP server (`msgvault serve`)
+├── mcp/                      MCP server (mark3labs/mcp-go)
+├── scheduler/                robfig/cron scheduled syncs + embed jobs
+├── remote/                   HTTPS client implementing query.Engine
+├── tui/                      Bubble Tea TUI
+├── store/                    SQLite system of record + Dialect interface (PG scaffold)
+├── dedup/                    Dedup algorithms (separate from store/dedup.go)
+├── search/                   Search query parser
+├── query/                    Multi-backend query engine (DuckDB-Parquet, SQLite, PG stub)
+├── vector/                   sqlite-vec embeddings, generations, OpenAI-compatible backend
+├── sync/                     Sync orchestration (full + incremental)
+├── gmail/                    Gmail API client + ratelimit + mocks
+├── imap/                     IMAP client (also implements gmail.API)
+├── oauth/                    OAuth2 (browser + device + service account)
+├── microsoft/                Microsoft Graph / O365 OAuth → IMAP token
+├── importer/                 Shared email-format ingest core
+├── emlx/                     Apple Mail .emlx parser + discover
+├── mbox/                     MBOX parser
+├── pst/                      Outlook PST parser (mooijtech/go-pst)
+├── applemail/                Apple Mail metadata helpers
+├── fbmessenger/              Facebook Messenger DYI
+├── gvoice/                   Google Voice export
+├── imessage/                 iMessage (chat.db; attributedBody parsing)
+├── whatsapp/                 WhatsApp export
+├── textimport/               Generic text-message helpers (phone normalisation)
+├── deletion/                 Staged-deletion manifest store + executor
+├── mime/                     enmime + chardet wrappers
+├── textutil/                 Charset / encoding helpers
+├── fileutil/                 Cross-OS secure file modes (chmod 600)
+├── logging/                  slog conventions
+├── config/                   TOML config loading; MkTempDir
+├── update/                   Self-update (checksum required)
+├── export/                   .eml / attachment export
+└── testutil/                 Shared test helpers (builders, fs, store, archive)
 ```
 
-## Quick Commands
+Each `internal/<pkg>/` has a `CLAUDE.md` scoped to that package. Read it
+before editing in that directory.
+
+## Quick commands
 
 ```bash
-# Build
-make build                    # Debug build
-make build-release            # Release build (optimized)
-make install                  # Install to ~/.local/bin or GOPATH
-make test                     # Run tests
-make lint                     # Run linter
-
-# CLI usage
-./msgvault init-db                                    # Initialize database
-./msgvault add-account you@gmail.com                  # Browser OAuth
-./msgvault add-account you@gmail.com --headless       # Device flow
-./msgvault add-account you@acme.com --oauth-app acme  # Named OAuth app
-./msgvault sync-full you@gmail.com --limit 100        # Sync with limit
-./msgvault sync-full you@gmail.com --after 2024-01-01 # Sync date range
-./msgvault sync-incremental you@gmail.com             # Incremental sync
-
-# TUI and analytics
-./msgvault tui                                        # Launch TUI
-./msgvault tui --account you@gmail.com                # Filter by account
-./msgvault tui --local                                # Force local (override remote config)
-./msgvault build-cache                                # Build Parquet cache
-./msgvault build-cache --full-rebuild                 # Full rebuild
-./msgvault stats                                      # Show archive stats
-
-# Apple Mail import
-./msgvault import-messenger --me you@facebook.messenger ~/facebook-dyi   # Import Facebook Messenger DYI
-./msgvault import-emlx                                # Auto-discover accounts
-./msgvault import-emlx ~/Library/Mail                 # Explicit mail directory
-./msgvault import-emlx --account me@gmail.com         # Specific account(s)
-./msgvault import-emlx /path/to/dir --identifier me@gmail.com  # Manual fallback
-
-# Daemon mode (NAS/server deployment)
-./msgvault serve                                      # Start HTTP API + scheduled syncs
-
-# Maintenance
-./msgvault repair-encoding                            # Fix UTF-8 encoding issues
+make build              # debug build
+make build-release      # optimised, stripped
+make install            # install to ~/.local/bin or GOPATH/bin
+make test               # default tags: fts5 sqlite_vec
+make lint               # golangci-lint --fix
+make lint-ci            # CI lint, no auto-fix
+make bench              # query engine benchmarks
+make install-hooks      # prek pre-commit hook
+make test-pg            # PostgreSQL scaffold; expected to fail (see PG_STATUS.md)
 ```
 
-## Key Files
+CGO is required (mattn/go-sqlite3, marcboeker/go-duckdb, asg017/sqlite-vec).
+Default build tags: **`fts5 sqlite_vec`**.
 
-### CLI (`cmd/msgvault/cmd/`)
-- `root.go` - Cobra root command, config loading
-- `syncfull.go` - Full sync command implementation
-- `syncincremental.go` - Incremental sync command
-- `tui.go` - TUI command, cache auto-build
-- `build_cache.go` - Parquet cache builder (DuckDB)
-- `repair_encoding.go` - UTF-8 encoding repair
+## Build-tag-gated features
 
-- `import_emlx.go` - Apple Mail .emlx import command
+`sqlite_vec` gates vector search. Three command pairs ship a real + stub
+file (`embed_vector.go` / `embed_vector_stub.go`, etc.). Without the tag,
+binary still builds; vector commands return clean errors.
 
-### Core (`internal/`)
-- `tui/model.go` - Bubble Tea TUI model and update logic
-- `tui/view.go` - View rendering with lipgloss styling
-- `query/engine.go` - DuckDB query engine over Parquet files
-- `query/sqlite.go` - SQLite query engine (fallback)
-- `store/store.go` - SQLite database operations
-- `store/schema.sql` - Core SQLite schema
-- `store/schema_sqlite.sql` - FTS5 virtual table
-- `deletion/manifest.go` - Deletion staging and manifest generation
-- `gmail/client.go` - Gmail API client with rate limiting
-- `oauth/oauth.go` - OAuth2 flows (browser + device)
-- `sync/sync.go` - Sync orchestration, MIME parsing
-- `mime/parse.go` - MIME message parsing
+## Storage layout
 
-### TUI Keybindings
-- `j/k` or `↑/↓` - Navigate rows
-- `Enter` - Drill down into selection
-- `Esc` or `Backspace` - Go back
-- `Tab` - Cycle views (Senders → Sender Names → Recipients → Recipient Names → Domains → Labels → Time)
-- `s` - Cycle sort field (Name → Count → Size)
-- `r` - Reverse sort direction
-- `t` - Jump to Time view (cycle granularity when already in Time)
-- `a` - Filter by account
-- `f` - Filter by attachments
-- `Space` - Toggle selection
-- `A` - Select all visible
-- `x` - Clear selection
-- `d` - Stage selected for deletion
-- `D` - Stage all messages matching current filter
-- `/` - Search
-- `?` - Help
-- `q` - Quit
+All under `~/.msgvault/` (override with `MSGVAULT_HOME`):
 
-## Database Schema
+- `msgvault.db` — SQLite (WAL)
+- `attachments/<2>/<sha256>` — content-addressed binaries
+- `tokens/<email>.json` — OAuth tokens, chmod 600
+- `analytics/year=YYYY/` — Parquet, partitioned by year
+- `deletions/{pending,completed,failed,cancelled}/` — manifest staging
+- `tmp/` — fallback temp dir (use `config.MkTempDir`, never `os.MkdirTemp("")`)
+- `config.toml` — optional config
 
-Core tables:
-- `sources` - Gmail accounts with history_id for incremental sync
-- `conversations` - Gmail thread abstraction
-- `messages` - Message metadata, foreign key to conversation
-- `message_raw` - Raw MIME blob (zlib compressed)
-- `labels` / `message_labels` - Gmail labels (many-to-many)
-- `participants` / `message_recipients` - From/To/Cc/Bcc addresses
-- `attachments` - Attachment metadata with content-hash deduplication
-- `messages_fts` - FTS5 virtual table
-- `sync_runs` / `sync_checkpoints` - Sync state for resumability
+## Working in this repo — invariants and rules
 
-Schema files in `internal/store/`:
-- `schema.sql` - Core schema (SQLite; shared structure)
-- `schema_sqlite.sql` - SQLite FTS5 virtual table
-- `schema_pg.sql` - PostgreSQL tsvector column + GIN index (opt-in, scaffold)
+### Always
 
-**Database backend**: SQLite is the default. PostgreSQL support is
-scaffolded behind a `Dialect` interface (`internal/store/dialect.go`);
-see `docs/PG_STATUS.md` for the current state and follow-up
-work required to make PostgreSQL functional end-to-end.
+- Run `go fmt ./...` and `go vet ./...` before committing. Stage all resulting changes including formatting-only files.
+- Stage **all** modified files. Run `git diff` and `git status` before committing.
+- Use `error` returns wrapped with `fmt.Errorf("...: %w", err)`.
+- Table-driven tests.
+- Route DB ops through `*store.Store`. Don't open `*sql.DB` ad-hoc.
+- Use `config.MkTempDir` for temp dirs. `os.MkdirTemp("", ...)` breaks on Windows under group policy.
+- Use `internal/testutil`. The right helper depends on what layer you're testing — see `internal/testutil/CLAUDE.md` for the catalog (three message builders for three layers; `dbtest` vs `storetest` separation exists to break import cycles).
 
-**Test env**: `MSGVAULT_TEST_DB=postgres://...` is scaffolded for the future
-PostgreSQL store test suite (`make test-pg`). Until the blockers in
-`docs/PG_STATUS.md` are resolved, PostgreSQL tests are expected to fail before
-schema initialization completes.
+### Never
 
-## Parquet Analytics
+- **Never JOIN or scan `message_bodies` in list/aggregate/search queries.** It's separated from `messages` so the messages B-tree stays small. Only access via direct PK lookup for single-message detail views. For text search use FTS5 (`messages_fts`).
+- **Never use SELECT DISTINCT with JOINs.** Use EXISTS sub-queries instead — semi-join is faster and avoids duplicates at the source.
+- **Never log user content / email addresses / message bodies at INFO.** PII rule from global CLAUDE.md. Use DEBUG for full context. INFO carries intent classification, counts, durations, error types.
+- **Never call an expensive function solely to log its output.** Reuse pipeline results.
+- **Never write code that loops single-row queries to "fan out".** Rewrite as JOIN, WHERE IN, or batch fetch. When converting a single-item method to a multi-item variant, rewrite the query — don't wrap.
+- **Every outbound HTTP call must have a timeout.** Especially on fan-out paths (api server, scheduler, embed backend). Use `AbortSignal.timeout()`-equivalent (`context.WithTimeout`).
+- Never commit test fixtures with real PII. Use `alice`, `bob`, `user@example.com`. The `internal/testutil/security_data.go` helpers exist for this.
 
-The TUI uses denormalized Parquet files for fast aggregate queries (~3000x faster than SQLite JOINs).
+### When changing data flow
 
-```
-~/.msgvault/
-├── msgvault.db              # SQLite: System of record
-└── analytics/               # Parquet: Aggregate analytics
-    ├── messages/year=*/     # Partitioned by year
-    └── _last_sync.json      # Incremental sync state
-```
+Trace forward after any fix. If you change how data is written, audit every
+reader. Removed dead guards your fix made unreachable. The write-side fix is
+half the job; the read-side impact is the other half.
 
-**Workflow:**
-1. Sync emails: `./msgvault sync-full you@gmail.com`
-2. Launch TUI: `./msgvault tui` (auto-builds cache if needed)
+### Pre-PR self-review
 
-**Parquet schema:**
-- Denormalized: `from_email`, `from_domain`, `to_emails[]`, `labels[]`, etc.
-- Partitioned by `year` for efficient time-range queries
-- Compact: small fraction of SQLite size (excludes message bodies)
+Always re-read every changed file as a reviewer, not the author, before
+opening a PR. Check: reconnect/retry, PII in logs, dead code from your own
+fixes, duplicate computation, falsy-vs-None coercion. One self-review pass
+prevents multi-round churn. Don't skip it for "small" changes.
 
-The TUI automatically builds/updates the Parquet cache on launch when new messages are detected.
+### PR review
 
-## Implementation Status
+Post review feedback as `gh pr comment`, not `gh pr review --request-changes`
+(GitHub blocks self-review-changes). The branch agent picks up fixes
+independently.
 
-### Completed
-- **Gmail Sync**: Full/incremental sync, OAuth (browser + headless), rate limiting, resumable checkpoints
-- **MIME Parsing**: Subject, body (text/HTML), attachments, charset detection
-- **Parquet ETL**: DuckDB-based SQLite → Parquet export with incremental updates
-- **Query Engine**: DuckDB over Parquet for fast aggregate analytics
-- **TUI**: Full-featured TUI with drill-down navigation, search, selection, deletion staging
-- **UTF-8 Repair**: Comprehensive encoding repair for all string fields
-- **Deletion Execution**: Execute staged deletions via Gmail API (trash or permanent delete)
+## Database backends
 
-### Not Yet Implemented
-- **App-level encryption**: Encrypt database and attachments at rest
-- **Web UI**: Browser-based interface
+SQLite is the default and only functional backend. PostgreSQL is **scaffolded
+behind a `Dialect` interface** (`internal/store/dialect.go`); see
+`docs/PG_STATUS.md` for blockers. `internal/query/postgres.go` returns
+`ErrNotImplemented` for almost every method.
 
-## Testing with Real Gmail Data
+The `loggedDB` wrapper silently calls `Dialect.Rebind` on every query, so most
+store call sites can keep using `?` placeholders portably. Only callers that
+bypass `loggedDB` (e.g. `subset.go`, raw `*sql.Conn` paths) need explicit
+rebind. `subset.go` is intentionally SQLite-only.
 
-```bash
-./msgvault init-db
-./msgvault add-account you@gmail.com
-./msgvault sync-full you@gmail.com --after 2024-12-01 --before 2024-12-15
-./msgvault tui
-```
+## Sync invariants
 
-Sync is **read-only** - no modifications to Gmail.
+- **history_id advances even on partial failure** (sync.go:380, incremental.go:215). One bad message can't block all future syncs.
+- **IMAP fakes `gmail.API`** so the same syncer handles both. ListHistory returns an error for IMAP. ThreadID is a synthetic `mailbox|uid` overridden by the syncer using References/In-Reply-To headers.
+- **`errDuplicateRFC822` rewrites composite IDs in place** when IMAP messages move between mailboxes (INBOX → Trash) — the syncer detects the duplicate by RFC822 Message-ID and updates rather than re-downloading.
+- **IMAP forces `NoResume=true`**; resume is cheap because `MessageExistsWithRawBatch` skips already-imported messages.
 
-## Test Data
+## Deletion safety
 
-Never use real people's names, email addresses, or identifiers in test fixtures. Use obviously synthetic names: `alice`, `bob`, `Test User`, `user@example.com`. Before committing test data, verify no real PII is present.
+- The **directory** under `~/.msgvault/deletions/` is authoritative — it wins over the inline `Status` field. `CancelManifest` renames before rewriting the field; a crash between the two leaves the file in `cancelled/` with `Status: pending` and the directory wins.
+- `Execute` (per-message) lands in `failed/` only when **all** messages failed.
+- `ExecuteBatch` always lands in `completed/` even with partial failures, because batch semantics expect partial progress. On resume it retries previous failures before continuing.
+- Permanent delete (vs Trash) requires the `https://mail.google.com/` Gmail scope or DWD equivalent.
 
-## Go Development
+## TUI invariants
 
-After making any Go code changes, always run `go fmt ./...` and `go vet ./...` before committing. Stage ALL resulting changes, including formatting-only files.
-
-## Git Workflow
-
-When committing changes, always stage ALL modified files (including formatting, generated files, and ancillary changes). Run `git diff` and `git status` before committing to ensure nothing is left unstaged.
-
-## Code Style & Linting
-
-All code must pass formatting and linting checks before commit. A pre-commit
-hook is available via [prek](https://prek.j178.dev/) to enforce this
-automatically:
-
-```bash
-make install-hooks             # Install pre-commit hook via prek
-make test                      # Run tests (SQLite default)
-make test-pg                   # PostgreSQL scaffold check; expected to fail until PG_STATUS blockers are fixed
-make fmt                       # Format code (go fmt)
-make lint                      # Run linter (auto-fix)
-make lint-ci                   # Run linter (CI, no auto-fix)
-go vet ./...                   # Check for issues
-```
-
-**Standards:**
-- Default gofmt configuration
-- Use `error` return values, wrap with context using `fmt.Errorf`
-- Table-driven tests
-
-## Code Conventions
-
-- Use Bubble Tea for TUI, lipgloss for styling
-- DuckDB for Parquet queries, go-duckdb driver
-- SQLite via marcboeker/go-duckdb for cache building, mattn/go-sqlite3 for store
-- Context-based cancellation for long operations
-- Route all DB operations through `Store` struct
-- Charset detection via gogs/chardet, encoding via golang.org/x/text/encoding
-
-## SQL Guidelines
-
-- **Never use SELECT DISTINCT with JOINs** - Use EXISTS subqueries instead (becomes semi-joins)
-- EXISTS is faster (stops at first match) and avoids duplicates at the source
-- Example - instead of:
-  ```sql
-  SELECT DISTINCT m.id FROM messages m
-  JOIN message_recipients mr ON mr.message_id = m.id
-  WHERE mr.recipient_type = 'from' AND ...
-  ```
-  Use:
-  ```sql
-  SELECT m.id FROM messages m
-  WHERE EXISTS (
-      SELECT 1 FROM message_recipients mr
-      WHERE mr.message_id = m.id AND mr.recipient_type = 'from' AND ...
-  )
-  ```
-
-- **Never JOIN or scan `message_bodies` in list/aggregate/search queries** — this table is separated from `messages` specifically to keep the messages B-tree small for fast scans. Only access `message_bodies` via direct PK lookup (`WHERE message_id = ?`) when displaying a single message detail view. For text search, use FTS5 (`messages_fts`); if FTS is unavailable, search `subject`/`snippet` only.
+- Stale-response filtering uses **per-domain request ID counters**. Snapshot the counter into the `tea.Cmd` closure; drop messages whose ID doesn't match.
+- `transitionBuffer` caches the pre-load frame. `View()` returns it verbatim until the matching `handle*Loaded` clears it. Don't bypass.
+- `cacheNeedsBuild` deliberately does not short-circuit — it collects every staleness signal so the log line names every cause.
+- The TUI auto-builds the Parquet cache on launch.
 
 ## Configuration
 
-All data defaults to `~/.msgvault/`:
-- `~/.msgvault/config.toml` - Configuration file
-- `~/.msgvault/msgvault.db` - SQLite database
-- `~/.msgvault/attachments/` - Content-addressed attachment storage
-- `~/.msgvault/tokens/` - OAuth tokens per account
-- `~/.msgvault/analytics/` - Parquet cache files
-
-Override with `MSGVAULT_HOME` environment variable.
-
 ```toml
-[data]
-# data_dir = "~/custom/path"
+# ~/.msgvault/config.toml
 
 [oauth]
-client_secrets = "/path/to/client_secret.json"
+client_secrets = "/path/to/client_secret.json"   # default Gmail OAuth app
 
-# Named OAuth apps for Google Workspace orgs
-# [oauth.apps.acme]
-# client_secrets = "/path/to/acme_secret.json"
+[oauth.apps.acme]                                # named OAuth app for a Workspace org
+client_secrets = "/path/to/acme_secret.json"
+# Or service account with domain-wide delegation:
+# service_account_key = "/secure/path/sa.json"
 
 [sync]
 rate_limit_qps = 5
+
+[[accounts]]                                     # daemon-mode scheduled sync
+email = "you@gmail.com"
+schedule = "0 2 * * *"
+enabled = true
+
+[server]
+api_port = 8080
+bind_addr = "0.0.0.0"
+api_key = "your-secret-key"                      # empty disables auth, logs WARN
+
+[remote]                                         # TUI client
+url = "https://msgvault.example.com:8080"
+api_key = "your-secret-key"
+# allow_insecure = true                          # only set for plain HTTP
 ```
+
+## TUI keybindings
+
+`j/k` `↑/↓` navigate · `Enter` drill in · `Esc`/`Backspace` back ·
+`Tab` cycle views · `s` cycle sort · `r` reverse sort · `t` time view ·
+`a` filter by account · `f` filter by attachments · `Space` toggle select ·
+`A` select-all-visible · `x` clear selection · `d` stage selected ·
+`D` stage all matching · `/` search · `?` help · `q` quit
+
+## Test data hygiene
+
+Never use real names / addresses / identifiers in fixtures. Use `alice`,
+`bob`, `Test User`, `user@example.com`. `internal/testutil/security_data.go`
+has helpers. Verify before commit.
+
+## Where to read next
+
+- `docs/ARCHITECTURE.md` — full system map (start here)
+- `docs/TESTING.md` — test taxonomy + prioritised gap list
+- `docs/subsystems/<name>.md` — per-area deep dive
+- `internal/<pkg>/CLAUDE.md` — scoped context when editing in that package
+- `docs/PG_STATUS.md` — Postgres scaffold blockers
+- `docs/accounts-identities-collections-dedup/` — identity model design
+- `docs/recovery.md` — recovery procedures
+- `internal/query/DESIGN.md` — query engine design (note: stale on RemoteEngine)
+- `SECURITY.md` — security model
