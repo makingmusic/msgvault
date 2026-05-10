@@ -147,6 +147,11 @@ in a single binary.`,
 		// writeable edition of msgvault to this read-only fork.
 		runReadonlyMigrations(cfg.HomeDir)
 
+		// Stamp interactive/sync commands with a read-only banner so
+		// the user can never lose track of which edition they are
+		// running. Quiet on pipes / non-TTY stderr.
+		printReadOnlyBanner(cmd)
+
 		return nil
 	},
 	// Note: log file closing is handled by ExecuteContext's deferred

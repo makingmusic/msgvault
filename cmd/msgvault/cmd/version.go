@@ -19,6 +19,7 @@ var versionCmd = &cobra.Command{
 	Short: "Print version information",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("msgvault %s\n", Version)
+		fmt.Printf("  edition: read-only (fork of upstream msgvault; cannot mutate remote mailboxes)\n")
 		fmt.Printf("  commit:  %s\n", Commit)
 		fmt.Printf("  built:   %s\n", BuildDate)
 		fmt.Printf("  go:      %s\n", runtime.Version())

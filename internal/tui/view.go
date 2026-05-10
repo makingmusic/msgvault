@@ -82,6 +82,17 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#000000"}).
 			Background(lipgloss.AdaptiveColor{Light: "#e8d44d", Dark: "#e8d44d"}).
 			Bold(true)
+
+	// readOnlyBadgeStyle paints the [READ-ONLY] chip in the title bar
+	// so the user can never lose track of which edition they are
+	// running. Yellow background with black foreground is the most
+	// universally recognisable "caution" colour pairing across
+	// terminal themes; bold to match the surrounding title bar weight.
+	readOnlyBadgeStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#000000"}).
+				Background(lipgloss.AdaptiveColor{Light: "#e8d44d", Dark: "#e8d44d"}).
+				Padding(0, 1)
 )
 
 // viewTypeAbbrev returns view type name for column headers and top-level breadcrumb.
@@ -132,8 +143,19 @@ func viewTypePrefix(vt query.ViewType) string {
 	}
 }
 
+// readOnlyBadgeText is the text shown in the title-bar badge that
+// identifies this build as the read-only edition of msgvault. Kept
+// short so it fits next to the title even on narrow terminals.
+const readOnlyBadgeText = "READ-ONLY"
+
 // buildTitleBar builds the title bar line (line 1 of the header).
-// Format: "msgvault [version] - Account          update: vX.Y.Z"
+// Format: "[READ-ONLY] msgvault [version] - Account          update: vX.Y.Z"
+//
+// The [READ-ONLY] chip is painted in a high-contrast colour (yellow
+// background, black foreground, bold) and rendered separately from
+// the rest of the title bar so its background survives composition.
+// Always present — the user must never lose track of which edition
+// they are running.
 func (m Model) buildTitleBar() string {
 	// Build title with version
 	titleText := "msgvault"
@@ -178,15 +200,23 @@ func (m Model) buildTitleBar() string {
 		modeStr = " [Email]"
 	}
 
-	// Build line content: "msgvault [hash] [Email] - Account          update: vX.Y.Z"
-	line1Content := fmt.Sprintf("%s%s - %s", titleText, modeStr, accountStr)
+	// Render the [READ-ONLY] badge first so we can account for its
+	// width when balancing the title bar against the update notice.
+	badge := readOnlyBadgeStyle.Render(readOnlyBadgeText)
+	badgeWidth := lipgloss.Width(badge)
+
+	// Build the rest of the title bar in titleBarStyle background.
+	// Format: " msgvault [hash] [Email] - Account          update: vX.Y.Z"
+	rest := fmt.Sprintf(" %s%s - %s", titleText, modeStr, accountStr)
 	if updateNotice != "" {
-		gap := m.width - 2 - lipgloss.Width(line1Content) - lipgloss.Width(updateNotice)
+		// -2 accounts for titleBarStyle's left+right padding (1 each).
+		gap := m.width - 2 - badgeWidth - lipgloss.Width(rest) - lipgloss.Width(updateNotice)
 		if gap > 1 {
-			line1Content += strings.Repeat(" ", gap) + updateNotice
+			rest += strings.Repeat(" ", gap) + updateNotice
 		}
 	}
-	return titleBarStyle.Render(padRight(line1Content, m.width-2)) // -2 for padding
+	rest = titleBarStyle.Render(padRight(rest, m.width-2-badgeWidth))
+	return lipgloss.JoinHorizontal(lipgloss.Top, badge, rest)
 }
 
 // buildBreadcrumb builds the breadcrumb text based on the current navigation level.
