@@ -22,14 +22,16 @@ internals.
 
 ## Scopes
 
-`Scopes` (`oauth.go:28`) — read+modify, used for sync/search.
-`ScopesDeletion` — `https://mail.google.com/`, required for the
-`batchDelete` API. `gmail.modify` allows trash but **not**
-`batchDelete`.
+`Scopes` (`oauth.go:28`) — `gmail.readonly` only. This is the read-only
+edition of msgvault; the binary contains no code that can mutate any
+remote mailbox. The requested scope set must remain a strict subset of
+what the user's Google Cloud OAuth client allows: a user who locks
+their GCP consent screen to `gmail.readonly` only must still be able
+to use this binary without `invalid_scope`.
 
-`Manager` exposes `HasScope(email, scope)` so the deletion command can
-detect that the stored token doesn't carry the deletion scope and
-prompt for re-authorization without an API round-trip first.
+`Manager` exposes `HasScope(email, scope)` so the startup migration
+can detect tokens minted by an older (read+modify) build and warn the
+user to re-authorize for least privilege.
 
 ## Browser flow details
 

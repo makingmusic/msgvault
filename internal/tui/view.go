@@ -1204,7 +1204,7 @@ var rawHelpLines = []string{
 	"  Space       Toggle selection",
 	"  S           Select all visible",
 	"  x           Clear selection",
-	"  d/D         Stage for deletion",
+	"  d/D         Show read-only-edition notice (deletion is disabled)",
 	"  a           View all messages",
 	"",
 	"Other",
@@ -1228,32 +1228,6 @@ func (m Model) helpMaxVisible() int {
 		v = len(rawHelpLines)
 	}
 	return v
-}
-
-// renderDeleteConfirmModal renders the deletion confirmation modal content.
-func (m Model) renderDeleteConfirmModal() string {
-	if m.pendingManifest == nil {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString(modalTitleStyle.Render("Confirm Deletion"))
-	sb.WriteString("\n\n")
-	_, _ = fmt.Fprintf(&sb, "Stage %d messages for deletion?\n\n", len(m.pendingManifest.GmailIDs))
-	sb.WriteString("This creates a deletion batch. Messages will NOT be\n")
-	sb.WriteString("deleted until you run 'msgvault delete-staged'\n")
-	sb.WriteString("with MSGVAULT_ENABLE_REMOTE_DELETE=1 set.\n\n")
-	if m.pendingManifest.Filters.Account == "" {
-		sb.WriteString("! Account not set. Use --account when executing.\n\n")
-	}
-	sb.WriteString("[Y] Yes, stage for deletion    [N] Cancel")
-	return sb.String()
-}
-
-// renderDeleteResultModal renders the deletion result modal content.
-func (m Model) renderDeleteResultModal() string {
-	return modalTitleStyle.Render("Result") + "\n\n" +
-		m.modalResult + "\n\n" +
-		"Press any key to continue"
 }
 
 // renderQuitConfirmModal renders the quit confirmation modal content.
@@ -1396,10 +1370,6 @@ func (m Model) overlayModal(background string) string {
 	var modalContent string
 
 	switch m.modal {
-	case modalDeleteConfirm:
-		modalContent = m.renderDeleteConfirmModal()
-	case modalDeleteResult:
-		modalContent = m.renderDeleteResultModal()
 	case modalQuitConfirm:
 		modalContent = m.renderQuitConfirmModal()
 	case modalAccountSelector:

@@ -15,12 +15,12 @@ Bubble Tea + lipgloss terminal UI for browsing the local archive (and remote msg
 - `textEngine query.TextEngine`: optional text-message backend; gates `m`.
 - `breadcrumbs []navigationSnapshot`: navigation stack of `viewState` snapshots.
 - `selection selectionState`: aggregate keys + message IDs for batch ops.
-- `modal modalType`, `modalCursor`, `pendingManifest`: modal dialog state.
+- `modal modalType`, `modalCursor`: modal dialog state.
 - `*RequestID uint64` (aggregate/load/detail/search): increment-then-compare for stale-response filtering — every async cmd snapshots its request ID and the handler ignores mismatches (`model.go:984`).
 - Search: `searchInput textinput.Model`, `searchMode` (Fast/Deep), `searchOffset/searchTotalCount`, `inlineSearchActive/inlineSearchDebounce`, plus a `preSearch*` snapshot so `Esc` restores the unsearched list without a re-query (`keys.go:1352`).
 - `transitionBuffer string`: cached frame returned from `View()` during async transitions to prevent flashing (`model.go:1511`).
 - `flashMessage`, `spinnerFrame`, `loading`: ephemeral UI.
-- `isRemote bool`: disables deletion/export when set.
+- `isRemote bool`: disables attachment export when set. (Deletion is disabled regardless of mode in this read-only edition.)
 
 `viewState` carries `level`, `viewType`, sort fields, cursor, scroll, current `rows`/`messages`/`messageDetail`, drill filter, search filter, detail-search state, thread state.
 
@@ -49,11 +49,11 @@ Toggled with `m` (`keys.go:97`). State lives in `textState` (`text_state.go:24`)
 - `/` activates the inline search bar; debounced (Fast 100ms / Deep 500ms) live updates fire `searchDebounceMsg`. `Tab` toggles Fast (Parquet metadata) vs Deep (SQLite FTS5 body) — only meaningful at message-list level (`keys.go:24`). `Enter` commits, `Esc` cancels and restores the pre-search snapshot (`keys.go:1326`).
 - In message detail, `/` opens find-in-page; `n`/`N` jump matches.
 - `Space` toggles the cursor row's selection; `S` selects all visible; `x` clears. Aggregate selections are scoped by `viewType` so switching views resets them.
-- `d`/`D` invokes `stageForDeletion()` (`model.go:1416`) → `ActionController.StageForDeletion` (`actions.go:65`) which resolves selections + drill filter into Gmail IDs, builds a `deletion.Manifest`, and shows a confirmation modal. Confirming saves the manifest under `<dataDir>/deletions/`. Disabled in remote mode.
+- `d`/`D` invokes `showReadOnlyNotice()` — a transient flash banner explaining that this build of msgvault cannot trash or delete email on any remote server, and pointing the user at upstream msgvault if they need deletion. The keys remain bound (rather than being removed) so users muscle-memorying the old "stage for deletion" gesture get a discovery moment instead of silence.
 
 ## Local vs remote backend
 
-`cmd/msgvault/cmd/tui.go:62` chooses the engine: when `[remote].url` is configured and `--local` is not passed, it uses `remote.NewEngine` (HTTP) and sets `Options.IsRemote = true`; deletion and export then short-circuit with a flash (`keys.go:213`, `keys.go:805`). Otherwise it opens SQLite, runs migrations, conditionally rebuilds the Parquet cache via `cacheNeedsBuild`/`buildCache`, and prefers `query.NewDuckDBEngine` over `query.NewSQLiteEngine` based on `query.HasCompleteParquetData`. `--force-sql` skips Parquet entirely. The TUI always installs a file-only logger while running so slog writes do not corrupt the alt-screen render (`tui.go:170`).
+`cmd/msgvault/cmd/tui.go:62` chooses the engine: when `[remote].url` is configured and `--local` is not passed, it uses `remote.NewEngine` (HTTP) and sets `Options.IsRemote = true`; export short-circuits with a flash. (Deletion is disabled regardless of mode in this read-only edition — `d`/`D` always shows a banner.) Otherwise it opens SQLite, runs migrations, conditionally rebuilds the Parquet cache via `cacheNeedsBuild`/`buildCache`, and prefers `query.NewDuckDBEngine` over `query.NewSQLiteEngine` based on `query.HasCompleteParquetData`. `--force-sql` skips Parquet entirely. The TUI always installs a file-only logger while running so slog writes do not corrupt the alt-screen render (`tui.go:170`).
 
 ## Keybindings (cite `keys.go`)
 

@@ -29,24 +29,15 @@ type MessageReader interface {
 	ListHistory(ctx context.Context, startHistoryID uint64, pageToken string) (*HistoryResponse, error)
 }
 
-// MessageDeleter provides write operations for deleting Gmail messages.
-type MessageDeleter interface {
-	// TrashMessage moves a message to trash (recoverable for 30 days).
-	TrashMessage(ctx context.Context, messageID string) error
-
-	// DeleteMessage permanently deletes a message.
-	DeleteMessage(ctx context.Context, messageID string) error
-
-	// BatchDeleteMessages permanently deletes multiple messages (max 1000).
-	BatchDeleteMessages(ctx context.Context, messageIDs []string) error
-}
-
 // API defines the interface for Gmail operations.
 // This interface enables mocking for tests without hitting the real API.
+//
+// This is the read-only edition of msgvault: there is no write surface
+// here (no Trash, no Delete, no Modify, no Send). The interface is
+// exactly AccountReader + MessageReader + Close.
 type API interface {
 	AccountReader
 	MessageReader
-	MessageDeleter
 
 	// Close releases any resources held by the client.
 	Close() error

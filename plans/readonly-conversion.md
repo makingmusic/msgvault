@@ -4,6 +4,12 @@
 modifying any remote email server. The tool becomes a one-way email backup:
 read from the server, write to the local archive, never the reverse.
 
+**Repo positioning:** This repo is a fork of upstream msgvault. The fork's
+single purpose is to be the read-only edition. Users who want write
+capability (trash, delete, etc.) should use upstream msgvault directly.
+Because the repos are split, this fork has no `writeable` build to ship and
+no need for build-tag gating — there is only one build, and it is read-only.
+
 **Why "structurally incapable" and not just "off by default":** A backup tool
 that holds delete-capable credentials is an attractive blast radius. Even if
 deletion is gated behind a flag, a bug, supply-chain compromise, or
@@ -95,24 +101,19 @@ cannot reintroduce write capability.
 - Delete the deletion subsystem and the Gmail/IMAP write methods (rows
   2–10 above). The mutation verbs cease to exist as Go symbols.
 
-**Layer C — Build-tag enforcement.**
-- Add a build tag `readonly` that becomes the **default** (and for v1, the
-  *only* supported) build. The Makefile sets it. There is no `writeable`
-  tag; we don't ship the alternative.
-- This is belt-and-braces: even if someone copies code back from git
-  history, the default build won't compile it.
-
-**Layer D — Runtime assertion.**
-- On startup, `internal/oauth` panics if any token on disk has a
+**Layer C — Runtime assertion.**
+- On startup, `internal/oauth` warns loudly if any token on disk has a
   non-readonly scope, with a one-line remediation: "Re-authorize:
-  `msgvault add-account <email>`. msgvault no longer accepts write
-  scopes." This catches stale tokens from the prior version.
+  `msgvault add-account <email>`. This fork no longer uses write
+  scopes." This catches stale tokens from the prior version. (We warn
+  rather than panic so the binary still works for read; see §5.)
 
-**Layer E — Static check in CI.**
-- A `go test ./...` test that greps the compiled binary's symbol table
-  for forbidden function names (`TrashMessage`, `DeleteMessage`, …) using
-  `go tool nm`. Fails the build if any appear. (Cheap, fast, catches a
-  whole class of regression.)
+(There is no build-tag layer or symbol-table CI check in this fork.
+Upstream msgvault remains the writeable edition, so this fork ships
+exactly one build and the deletion of the code is itself the guarantee.
+The compiler enforces it: any reintroduced call site fails to build.
+Two narrow tests in §6 cover the two regressions the compiler can't
+see — silent scope widening, and IMAP `BODY[` reintroduction.)
 
 ---
 
@@ -129,11 +130,12 @@ server. It's part of the dedup workflow (`internal/dedup/`). Keep it, but:
   (audit confirms there isn't, but re-verify after deletion subsystem is
   removed).
 
-**`internal/microsoft/oauth.go:DeleteToken`.**
+**`internal/microsoft/oauth.go:DeleteToken` (decided).**
 This revokes the user's *own* refresh token at the Microsoft endpoint and
-deletes the local token file. It's "logout," not "modify mailbox." Keep
-it. Rename the public method to `RevokeOwnToken` to make the intent
-unambiguous.
+deletes the local token file. It's "logout," not "modify mailbox." **Keep
+it; rename the public method to `RevokeOwnToken`** to make the intent
+unambiguous to future readers and auditors. Update all call sites and
+docstrings accordingly.
 
 **Deletion manifests on disk from earlier installs.**
 On startup, if `~/.msgvault/deletions/pending/` or `in_progress/` is
@@ -143,11 +145,25 @@ been moved to ~/.msgvault/deletions.archived/ and will be ignored.
 Delete the directory to dismiss." Move (don't delete) so the user can
 inspect. (See §7.)
 
-**TUI keybindings `d` and `D`.**
-Currently stage selected / stage all matching for deletion. Three
-options: (a) remove the bindings, (b) repurpose for "remove from local
-view" with no remote effect, (c) repurpose for "export to .eml." Default
-to (a) — the simplest is fewest-keys.
+**TUI keybindings `d` and `D` (decided).**
+Currently stage selected / stage all matching for deletion. **Repurpose
+both keys to surface a transient banner (toast/popup) explaining that
+this is the read-only edition of msgvault and deletion is disabled.**
+The keys remain bound — pressing them is the user's discovery moment for
+the product framing, not a silent no-op.
+
+Banner text (draft, refine in implementation):
+> "This is the read-only edition of msgvault. Deletion is disabled by
+> design — this build cannot trash or delete email on any remote server.
+> If you need deletion, use upstream msgvault."
+
+Implementation notes:
+- Both `d` and `D` show the same banner (no need to differentiate
+  selected vs all-matching — neither does anything).
+- Banner auto-dismisses after a few seconds or on any keypress; should
+  not block input.
+- Help screen (`?`) lists `d`/`D` as "show read-only notice" so users
+  who scan help discover the framing without having to press a key.
 
 **MCP server.**
 Audit `internal/mcp/` tool list. If any tool name suggests mutation
@@ -206,31 +222,43 @@ remote state.)
 
 ## 6. Verification strategy
 
-**Unit/integration:**
-- Delete tests for the deletion subsystem (they go with the package).
-- Add `internal/oauth/scopes_test.go`: asserts `Scopes` contains exactly
-  one entry, `gmail.GmailReadonlyScope`.
-- Add `internal/gmail/readonly_test.go`: asserts `MessageDeleter` is not
-  a defined type and `*Client` has no method named `TrashMessage`,
-  `DeleteMessage`, `BatchDeleteMessages`. (Reflection-based; runs fast.)
-- Add `internal/imap/readonly_test.go`: same shape as the Gmail one.
+The bulk of the conversion is *deletion of code*, and the compiler is the
+test for deletion: if `MessageDeleter` doesn't exist, code that called it
+doesn't build. Reflection tests asserting "method X is not present" or
+CI greps over the binary's symbol table are checking the same thing the
+build already enforces, so we don't add them.
 
-**Binary symbol check:**
-- New CI step `make verify-readonly`: compiles a release binary, runs
-  `go tool nm` plus `grep -E 'Trash|BatchDelete|StoreFlags'`, and fails
-  the build if anything matches an allowlist-curated forbidden set.
+Two automated tests earn their keep — they cover regressions the
+compiler genuinely cannot see:
 
-**HTTP/MCP route check:**
-- `internal/api/readonly_test.go`: enumerates routes; asserts none match
-  forbidden patterns.
-- `internal/mcp/readonly_test.go`: enumerates registered tools; asserts
-  every tool's declared capability is read-only.
+1. **`internal/oauth/scopes_test.go`** (~5 lines). Asserts `Scopes`
+   contains exactly one entry, `gmail.GmailReadonlyScope`. Defends
+   against a future "let me add label support" PR silently widening the
+   scope list. The compiler can't catch this because `Scopes` is
+   `[]string` — anything is type-valid.
+2. **`internal/imap/no_body_fetch_test.go`** (~10 lines). Source-grep
+   over `internal/imap/*.go` asserting no `BODY[` occurrence outside an
+   allowlisted comment — only `BODY.PEEK[` or the library equivalent
+   (`Peek: true`) is permitted. Defends against a contributor copy-
+   pasting a fetch that silently marks messages as read on the server.
 
-**Manual smoke test before release:**
+**Existing deletion tests** in `internal/deletion/` are deleted with the
+package; nothing to do there.
+
+**What we deliberately *don't* test:**
+- Reflection assertions that `TrashMessage` / `DeleteMessage` /
+  `BatchDeleteMessages` are absent — redundant with the compiler.
+- API/MCP route enumeration asserting "no mutation routes" — would also
+  flag legitimate read-side POSTs (search bodies, sync triggers) and
+  produce false-positive noise. Any new write route would be obvious in
+  the PR diff.
+- A `go tool nm` symbol-table CI check — overkill once the code is
+  deleted, and fragile across Go versions because library symbols change.
+
+**Manual smoke tests before release:**
 - Run against a Gmail test account. Confirm OAuth consent screen shows
   only "Read your email." Confirm no command in `--help` mentions
-  deletion. Confirm a binary diff against the current release
-  shows the deletion symbols are gone (`go tool nm` before/after).
+  deletion.
 - **Restricted-GCP-client test (gating release).** Create a Google
   Cloud project whose OAuth consent screen lists *only*
   `https://www.googleapis.com/auth/gmail.readonly` under "scopes for
@@ -238,8 +266,8 @@ remote state.)
   project. Drop its `client_secret.json` into a fresh msgvault home and
   run `msgvault add-account`. The consent flow must complete without
   `invalid_scope`, and a subsequent `msgvault sync` must fetch messages
-  successfully. This test is the contract for the whole conversion — if
-  it fails, the binary still asks for a scope the user-configured GCP
+  successfully. This is the contract for the whole conversion — if it
+  fails, the binary still asks for a scope the user-configured GCP
   project doesn't grant, and the release is not done.
 
 ---
@@ -265,34 +293,37 @@ soft-delete semantics; nothing about that table touches the network.
 
 ---
 
-## 8. Implementation phases
+## 8. Implementation order (single PR)
 
-Sequenced so each phase leaves the tree compiling and tests passing.
+Ship as one PR. The "phases" below are an ordering for the
+implementation work — do them in this order so the tree compiles after
+every step and so a partial review can read the diff narrative — but
+they all land together. Rationale: this is a coherent product
+repositioning, not an incremental feature; reviewers benefit from seeing
+the whole picture, and we don't ship a half-converted binary.
 
-**Phase 1 — Scope reduction.** OAuth scope downgrade, `Scopes` and
-`ScopesDeletion` cleanup, scope-test added. Deletion code still present
-but unreachable for new tokens. *Smallest reversible step; ship and
-verify in isolation if desired.*
+Suggested working order inside the PR:
 
-**Phase 2 — TUI and CLI removal.** Delete `cmd/msgvault/cmd/deletions.go`,
-TUI staging code, `d`/`D` keybindings. Rename `delete-deduped` →
-`prune-local`. Update `--help` and TUI `?`. Update tests.
+1. **Scope reduction.** OAuth scope downgrade in `internal/oauth/oauth.go`;
+   delete `ScopesDeletion`; add `internal/oauth/scopes_test.go`.
+2. **CLI surface removal.** Delete `cmd/msgvault/cmd/deletions.go`. Rename
+   `delete-deduped` → `prune-local` and update help text.
+3. **TUI changes.** Replace `stageForDeletion`/`confirmDeletion` with the
+   read-only-notice banner on `d`/`D`. Update `?` help.
+4. **Subsystem removal.** Delete `internal/deletion/` entirely. Delete
+   `MessageDeleter` interface and `Trash`/`Delete`/`BatchDelete` methods
+   on Gmail and IMAP clients. Delete their rate-limit op constants.
+   Rename Microsoft `DeleteToken` → `RevokeOwnToken`.
+5. **Regression tests.** Add `internal/oauth/scopes_test.go` and
+   `internal/imap/no_body_fetch_test.go` (the only two tests this PR
+   needs — see §6).
+6. **Migration.** Add startup legacy-scope detection and
+   `~/.msgvault/deletions/` directory archive (§7).
+7. **Docs.** README, SECURITY.md, ARCHITECTURE.md updates. Release note
+   explaining this is the read-only fork.
 
-**Phase 3 — Subsystem and client method removal.** Delete
-`internal/deletion/` entirely. Delete `MessageDeleter` interface and
-`Trash/Delete/BatchDelete` methods on Gmail and IMAP clients. Delete
-their rate-limit op constants. Add the readonly_test.go files.
-
-**Phase 4 — Build tag, symbol check, runtime assertion.** Add `readonly`
-build tag (default). Add `make verify-readonly`. Add startup
-legacy-scope detection and migration of the `deletions/` directory.
-
-**Phase 5 — Docs and product framing.** README rewrite, SECURITY.md
-update, ARCHITECTURE.md update, release notes explaining the breaking
-change.
-
-Each phase is its own PR. After Phase 3, the *capability* is gone; Phases
-4–5 are about making that durable and visible.
+After step 4, the *capability* is gone; steps 5–7 make that durable and
+visible.
 
 ---
 
@@ -313,24 +344,20 @@ which is harmless but you can revoke and re-grant for least privilege."
 what the symbol-table CI check and readonly_test.go files defend against.
 The product invariant is enforced in code, not by convention.
 
-**Open question — IMAP "read receipt" side effects.** Some IMAP servers
-mutate state when a client issues `FETCH BODY[]` (vs `FETCH BODY.PEEK[]`)
-by setting the `\Seen` flag. Audit `internal/imap/` to confirm we
-exclusively use `BODY.PEEK[]` (or equivalent in the chosen IMAP library)
-for fetches. If we don't, fix it; reading should not flip read/unread on
-the server.
+**Resolved — IMAP `\Seen` side effects.** Audited. Two fetch sites
+exist in `internal/imap/client.go`: line 340 fetches metadata only
+(UID + Envelope, no body), and line 703 uses `Peek: true` (`BODY.PEEK[]`)
+with an inline comment explaining why. CLAUDE.md line 108 codifies it
+as a guardrail. No fix needed; add a regression test (see §6) so a
+future contributor can't reintroduce `BODY[` by accident.
 
-**Open question — Microsoft Graph DeleteToken.** We keep this as
-"revoke own credential," but it's a remote-mutation in a literal sense.
-Decision recommended: keep it, rename to `RevokeOwnToken`, document it
-as logout. Surface it only via an explicit `msgvault remove-account`
-command. Confirm this is acceptable to the product framing or remove it
-and let users revoke at the Microsoft account page.
+**Resolved — Microsoft Graph DeleteToken.** Keep, rename to
+`RevokeOwnToken`. Document as "logout / remove-account" — the remote
+call only revokes the user's own credential, never any mailbox content.
 
-**Open question — what to do with the `d`/`D` keybindings.** Default
-recommendation: unbind. Alternatives: rebind to "export selected to
-.eml" (useful and read-only) or "hide from local view." Pick before
-Phase 2.
+**Resolved — TUI `d`/`D` keybindings.** Both keys show a transient
+banner explaining this is the read-only edition and deletion is
+disabled. See §4 for banner text and behavior.
 
 ---
 
@@ -342,16 +369,18 @@ Phase 2.
       methods.
 - [ ] CLI: `delete-staged`, `list-deletions`, `show-deletion` removed;
       `delete-deduped` renamed to `prune-local`.
-- [ ] TUI: deletion staging UI and `d`/`D` keybindings removed (or
-      rebound to a read-only action).
-- [ ] `make verify-readonly` passes; runs in CI.
+- [ ] TUI: deletion staging UI removed; `d`/`D` show the read-only-edition
+      banner; `?` help updated.
+- [ ] Microsoft `DeleteToken` renamed to `RevokeOwnToken`; call sites
+      updated.
+- [ ] `internal/oauth/scopes_test.go` and
+      `internal/imap/no_body_fetch_test.go` added and passing.
 - [ ] Startup legacy-scope warning + `deletions/` directory migration in
       place.
 - [ ] README, SECURITY.md, ARCHITECTURE.md updated.
 - [ ] Release notes call out the breaking change and the upgrade path.
 - [ ] Smoke test: fresh OAuth consent screen shows read-only scope only;
-      `go tool nm` on the release binary contains none of the forbidden
-      symbols.
+      no command in `--help` mentions deletion.
 - [ ] Restricted-GCP-client test passes: a Google Cloud OAuth client
       configured with only `gmail.readonly` in its scope list completes
       OAuth + sync + query end-to-end with no `invalid_scope` error.

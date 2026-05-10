@@ -16,6 +16,10 @@ import (
 )
 
 // Tool name constants.
+//
+// This is the read-only edition of msgvault. The MCP surface intentionally
+// excludes any tool that would mutate remote mailboxes (no
+// `stage_deletion`, no `trash`, no `delete`, no label/flag mutation).
 const (
 	ToolSearchMessages      = "search_messages"
 	ToolGetMessage          = "get_message"
@@ -24,7 +28,6 @@ const (
 	ToolListMessages        = "list_messages"
 	ToolGetStats            = "get_stats"
 	ToolAggregate           = "aggregate"
-	ToolStageDeletion       = "stage_deletion"
 	ToolSearchByDomains     = "search_by_domains"
 	ToolFindSimilarMessages = "find_similar_messages"
 )
@@ -111,7 +114,6 @@ func newMCPServer(opts ServeOptions) *server.MCPServer {
 	s.AddTool(listMessagesTool(), h.listMessages)
 	s.AddTool(getStatsTool(), h.getStats)
 	s.AddTool(aggregateTool(), h.aggregate)
-	s.AddTool(stageDeletionTool(), h.stageDeletion)
 	s.AddTool(searchByDomainsTool(), h.searchByDomains)
 	if opts.Backend != nil {
 		s.AddTool(findSimilarMessagesTool(), h.findSimilarMessages)
@@ -312,30 +314,6 @@ func searchByDomainsTool() mcp.Tool {
 		withOffset(),
 		withAfter(),
 		withBefore(),
-	)
-}
-
-func stageDeletionTool() mcp.Tool {
-	return mcp.NewTool(ToolStageDeletion,
-		mcp.WithDescription("Stage messages for deletion. Use EITHER 'query' (Gmail-style search) OR structured filters (from, domain, label, etc.), not both. Does NOT delete immediately - run 'msgvault delete-staged' CLI command to execute staged deletions."),
-		withAccount(),
-		mcp.WithString("query",
-			mcp.Description("Gmail-style search query (e.g. 'from:linkedin subject:job alert'). Cannot be combined with structured filters."),
-		),
-		mcp.WithString("from",
-			mcp.Description("Filter by sender email address"),
-		),
-		mcp.WithString("domain",
-			mcp.Description("Filter by sender domain (e.g. 'linkedin.com')"),
-		),
-		mcp.WithString("label",
-			mcp.Description("Filter by Gmail label (e.g. 'CATEGORY_PROMOTIONS')"),
-		),
-		withAfter(),
-		withBefore(),
-		mcp.WithBoolean("has_attachment",
-			mcp.Description("Only messages with attachments"),
-		),
 	)
 }
 

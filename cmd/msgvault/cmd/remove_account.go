@@ -176,9 +176,9 @@ func runRemoveAccount(cmd *cobra.Command, args []string) error {
 						cfg.TokensDir(),
 						logger,
 					)
-					if err := msMgr.DeleteToken(imapCfg.Username); err != nil {
+					if err := msMgr.RevokeOwnToken(imapCfg.Username); err != nil {
 						fmt.Fprintf(os.Stderr,
-							"Warning: could not remove Microsoft token: %v\n", err,
+							"Warning: could not revoke Microsoft token: %v\n", err,
 						)
 					}
 				default:

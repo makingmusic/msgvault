@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/query"
 )
 
@@ -112,84 +111,30 @@ func TestClearSelection(t *testing.T) {
 	assertSelectionCount(t, model, 0)
 }
 
-func TestStageForDeletionWithAggregateSelection(t *testing.T) {
+// TestDKeyShowsReadOnlyNotice verifies the read-only-edition behavior:
+// pressing `D` (or `d`) at the aggregate level does not stage anything
+// and does not modify selection — it just surfaces a flash message
+// explaining that deletion is disabled.
+func TestDKeyShowsReadOnlyNotice(t *testing.T) {
 	model := NewBuilder().
 		WithRows(makeRow("alice@example.com", 2)).
 		WithGmailIDs("msg1", "msg2").
 		Build()
 
 	model = selectRow(t, model, 0)
+	prevSelectionCount := model.selectionCount()
+
 	model, _ = sendKey(t, model, key('D'))
 
-	assertModal(t, model, modalDeleteConfirm)
-	assertPendingManifestGmailIDs(t, model, 2)
-}
-
-func TestStageForDeletion(t *testing.T) {
-	accountID1 := int64(1)
-	nonExistentID := int64(999)
-
-	tests := []struct {
-		name             string
-		accountFilter    *int64
-		accounts         []query.AccountInfo
-		expectedAccount  string
-		checkViewWarning bool // whether to check for "Account not set" warning
-	}{
-		{
-			name:            "with account filter",
-			accountFilter:   &accountID1,
-			accounts:        testAccounts,
-			expectedAccount: "user1@gmail.com",
-		},
-		{
-			name:            "single account auto-selects",
-			accounts:        []query.AccountInfo{{ID: 1, Identifier: "only@gmail.com"}},
-			expectedAccount: "only@gmail.com",
-		},
-		{
-			name:            "multiple accounts no filter",
-			accounts:        testAccounts,
-			expectedAccount: "",
-		},
-		{
-			name:             "account filter not found",
-			accountFilter:    &nonExistentID,
-			accounts:         testAccounts,
-			expectedAccount:  "",
-			checkViewWarning: true,
-		},
+	assertModal(t, model, modalNone)
+	if model.flashMessage == "" {
+		t.Error("expected flashMessage to be set after pressing D")
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			b := NewBuilder().
-				WithRows(makeRow("alice@example.com", 2)).
-				WithGmailIDs("msg1", "msg2")
-
-			if len(tc.accounts) > 0 {
-				b = b.WithAccounts(tc.accounts...)
-			}
-			if tc.accountFilter != nil {
-				b = b.WithAccountFilter(tc.accountFilter)
-			}
-
-			model := b.Build()
-			model = selectRow(t, model, 0)
-
-			newModel, _ := model.stageForDeletion()
-			model = newModel.(Model)
-
-			assertPendingManifest(t, model, tc.expectedAccount)
-			assertModal(t, model, modalDeleteConfirm)
-
-			if tc.checkViewWarning {
-				view := model.View()
-				if !strings.Contains(view, "Account not set") {
-					t.Errorf("expected 'Account not set' warning in delete confirm modal, view:\n%s", view)
-				}
-			}
-		})
+	if !strings.Contains(strings.ToLower(model.flashMessage), "read-only") {
+		t.Errorf("expected flash to mention 'read-only', got %q", model.flashMessage)
+	}
+	if got := model.selectionCount(); got != prevSelectionCount {
+		t.Errorf("D should not modify selection; count was %d, now %d", prevSelectionCount, got)
 	}
 }
 
@@ -205,29 +150,6 @@ func TestAKeyShowsAllMessages(t *testing.T) {
 	assertFilterKey(t, model, "")
 	assertCmd(t, cmd, true)
 	assertBreadcrumbCount(t, model, 1)
-}
-
-func TestModalDismiss(t *testing.T) {
-	model := NewBuilder().
-		WithModal(modalDeleteResult).
-		Build()
-	model.modalResult = "Test result"
-
-	model, _ = applyModalKey(t, model, key('x'))
-
-	assertModalCleared(t, model)
-}
-
-func TestConfirmModalCancel(t *testing.T) {
-	model := NewBuilder().
-		WithModal(modalDeleteConfirm).
-		Build()
-	model.pendingManifest = &deletion.Manifest{}
-
-	model, _ = applyModalKey(t, model, key('n'))
-
-	assertModal(t, model, modalNone)
-	assertPendingManifestCleared(t, model)
 }
 
 func TestSelectionCount(t *testing.T) {
@@ -267,15 +189,16 @@ func TestHasSelection(t *testing.T) {
 	}
 }
 
-func TestDKeyAutoSelectsCurrentRow(t *testing.T) {
+// TestDKeyDoesNotAutoSelectInReadOnly verifies that pressing `d` at the
+// aggregate level no longer auto-selects the current row (the old
+// stage-for-deletion behavior). It just shows the read-only flash.
+func TestDKeyDoesNotAutoSelectInReadOnly(t *testing.T) {
 	model := NewBuilder().
 		WithRows(
 			makeRow("alice@example.com", 10),
 			makeRow("bob@example.com", 5),
 		).
-		WithGmailIDs("msg1", "msg2").
 		WithViewType(query.ViewSenders).
-		WithAccounts(query.AccountInfo{ID: 1, Identifier: "test@gmail.com"}).
 		Build()
 	model.cursor = 1
 
@@ -283,46 +206,33 @@ func TestDKeyAutoSelectsCurrentRow(t *testing.T) {
 
 	m := applyAggregateKey(t, model, key('d'))
 
-	assertSelected(t, m, "bob@example.com")
-	assertModal(t, m, modalDeleteConfirm)
+	assertHasSelection(t, m, false)
+	assertModal(t, m, modalNone)
+	if m.flashMessage == "" {
+		t.Error("expected read-only flash after pressing d")
+	}
 }
 
-func TestDKeyWithExistingSelection(t *testing.T) {
-	model := NewBuilder().
-		WithRows(
-			makeRow("alice@example.com", 10),
-			makeRow("bob@example.com", 5),
-		).
-		WithGmailIDs("msg1", "msg2").
-		WithViewType(query.ViewSenders).
-		WithAccounts(query.AccountInfo{ID: 1, Identifier: "test@gmail.com"}).
-		WithSelectedAggregates("alice@example.com").
-		Build()
-	model.cursor = 1
-
-	m := applyAggregateKey(t, model, key('d'))
-
-	assertSelected(t, m, "alice@example.com")
-	assertNotSelected(t, m, "bob@example.com")
-	assertModal(t, m, modalDeleteConfirm)
-}
-
-func TestMessageListDKeyAutoSelectsCurrentMessage(t *testing.T) {
+// TestMessageListDKeyDoesNotAutoSelectInReadOnly verifies the same for
+// the message-list level.
+func TestMessageListDKeyDoesNotAutoSelectInReadOnly(t *testing.T) {
 	model := NewBuilder().
 		WithMessages(
 			query.MessageSummary{ID: 1, SourceMessageID: "msg1", Subject: "Hello"},
 			query.MessageSummary{ID: 2, SourceMessageID: "msg2", Subject: "World"},
 		).
 		WithLevel(levelMessageList).
-		WithAccounts(query.AccountInfo{ID: 1, Identifier: "test@gmail.com"}).
 		Build()
 
 	assertHasSelection(t, model, false)
 
 	m := applyMessageListKey(t, model, key('d'))
 
-	assertMessageSelected(t, m, 1)
-	assertModal(t, m, modalDeleteConfirm)
+	assertHasSelection(t, m, false)
+	assertModal(t, m, modalNone)
+	if m.flashMessage == "" {
+		t.Error("expected read-only flash after pressing d")
+	}
 }
 
 func TestToggleAggregateSelection(t *testing.T) {

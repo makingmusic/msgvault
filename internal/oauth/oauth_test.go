@@ -93,8 +93,8 @@ func TestScopesToString(t *testing.T) {
 		},
 		{
 			name:   "multiple scopes",
-			scopes: []string{"https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.modify"},
-			want:   "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.modify",
+			scopes: []string{"https://www.googleapis.com/auth/gmail.readonly", "openid"},
+			want:   "https://www.googleapis.com/auth/gmail.readonly openid",
 		},
 		{
 			name:   "three scopes",
@@ -118,7 +118,6 @@ func TestHasScope(t *testing.T) {
 
 	writeTokenFile(t, mgr, "test@gmail.com", testToken, []string{
 		"https://www.googleapis.com/auth/gmail.readonly",
-		"https://www.googleapis.com/auth/gmail.modify",
 	})
 
 	// Has a scope that was saved
@@ -126,9 +125,9 @@ func TestHasScope(t *testing.T) {
 		t.Error("expected HasScope to return true for gmail.readonly")
 	}
 
-	// Does not have deletion scope
-	if mgr.HasScope("test@gmail.com", "https://mail.google.com/") {
-		t.Error("expected HasScope to return false for mail.google.com")
+	// Does not have a scope that was not saved
+	if mgr.HasScope("test@gmail.com", "https://www.googleapis.com/auth/gmail.modify") {
+		t.Error("expected HasScope to return false for gmail.modify")
 	}
 
 	// Non-existent account
@@ -138,7 +137,7 @@ func TestHasScope(t *testing.T) {
 }
 
 func TestTokenFileScopesRoundTrip(t *testing.T) {
-	mgr := setupTestManager(t, ScopesDeletion)
+	mgr := setupTestManager(t, Scopes)
 
 	token := &oauth2.Token{
 		AccessToken:  "access",
@@ -146,7 +145,7 @@ func TestTokenFileScopesRoundTrip(t *testing.T) {
 		TokenType:    "Bearer",
 	}
 
-	if err := mgr.saveToken("test@gmail.com", token, ScopesDeletion); err != nil {
+	if err := mgr.saveToken("test@gmail.com", token, Scopes); err != nil {
 		t.Fatal(err)
 	}
 
@@ -156,8 +155,8 @@ func TestTokenFileScopesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(tf.Scopes) != 1 || tf.Scopes[0] != "https://mail.google.com/" {
-		t.Errorf("expected ScopesDeletion, got %v", tf.Scopes)
+	if len(tf.Scopes) != 1 || tf.Scopes[0] != "https://www.googleapis.com/auth/gmail.readonly" {
+		t.Errorf("expected Scopes, got %v", tf.Scopes)
 	}
 
 	// loadToken should still work (returns just the token)

@@ -130,3 +130,15 @@ func printJSON(v any) error {
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
 }
+
+// truncate clips s to max characters, replacing the tail with "..." when
+// truncation occurs. Used by table-style output to keep columns narrow.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	if max < 3 {
+		return s[:max]
+	}
+	return s[:max-3] + "..."
+}

@@ -42,12 +42,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/textproto"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -55,7 +53,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/store"
 )
 
@@ -91,30 +88,6 @@ type Config struct {
 	// boundaries, while account/per-source modes do not.
 	ScopeIsCollection bool
 
-	// DeleteDupsFromSourceServer, when true, writes pending
-	// deletion manifests for pruned duplicates that meet ALL of:
-	//   1. the pruned copy lives in a remote source whose type
-	//      appears in remoteSourceTypes (gmail today; imap is gated
-	//      until staged manifests can be routed to an IMAP executor),
-	//   2. the surviving copy is in the SAME source_id (i.e. the
-	//      very same remote mailbox holds the winner).
-	//
-	// This second rule is load-bearing: it guarantees that a
-	// merged-pile dedup run can never cause deletions from the
-	// user's authoritative Gmail/IMAP account just because a
-	// duplicate was found in a local archive. Only true
-	// intra-mailbox duplicates are ever proposed for remote
-	// deletion.
-	//
-	// Even with this rule, the field defaults to false so that
-	// destructive side effects never happen without an explicit
-	// --delete-dups-from-source-server opt-in at the CLI layer.
-	DeleteDupsFromSourceServer bool
-
-	// DeletionsDir is the directory where staged deletion manifests
-	// are written. Required when DeleteDupsFromSourceServer is true.
-	DeletionsDir string
-
 	// IdentityAddressesBySource maps each source ID to the set of
 	// confirmed "me" addresses for that source. When a pruned
 	// candidate's From: matches the address set for its source,
@@ -129,19 +102,6 @@ type Config struct {
 // DefaultSourcePreference is the default source-type authority order.
 var DefaultSourcePreference = []string{
 	"gmail", "imap", "mbox", "emlx", "hey",
-}
-
-// remoteSourceTypes lists source types whose messages can be deleted
-// via the deletion-staging machinery.
-//
-// Only gmail is listed today: the staged-deletion manifest format and
-// executor are Gmail-specific (manifest.GmailIDs, gmail.API client). Adding
-// "imap" here would let an IMAP dedup run with --delete-dups-from-source-server
-// stage manifests that delete-staged would then try to execute through Gmail.
-// Re-add IMAP only after manifests record source type and delete-staged can
-// route to an IMAP executor.
-var remoteSourceTypes = map[string]bool{
-	"gmail": true,
 }
 
 // Engine orchestrates duplicate detection and merging.
@@ -219,25 +179,6 @@ type ExecutionSummary struct {
 	LabelsTransferred int
 	RawMIMEBackfilled int
 	BatchID           string
-	StagedManifests   []StagedManifest
-}
-
-// StagedManifest records a single deletion manifest created by dedup.
-type StagedManifest struct {
-	Account      string
-	SourceType   string
-	ManifestID   string
-	MessageCount int
-}
-
-// remoteKey groups remote source IDs by the (account, source_type) pair so
-// that a user with multiple remote sources sharing the same account
-// identifier (e.g. gmail + imap for the same address) gets one manifest per
-// source type rather than a single manifest whose SourceType label reflects
-// only the first contributor.
-type remoteKey struct {
-	Account    string
-	SourceType string
 }
 
 // Scan finds all duplicate groups that dedup would prune.
@@ -828,9 +769,11 @@ func sourcePriority(sourceType string, priorityMap map[string]int) int {
 }
 
 // Execute merges every duplicate group: unions labels onto the
-// survivor, soft-deletes the pruned duplicates, and — when
-// DeleteDupsFromSourceServer is enabled AND a pruned copy shares a
-// source_id with its survivor — writes a deletion manifest.
+// survivor and soft-deletes the pruned duplicates locally.
+//
+// This fork (read-only edition) does not stage remote deletions —
+// dedup affects the local archive only and is reversible via
+// Engine.Undo until prune-local makes the deletion permanent.
 func (e *Engine) Execute(
 	ctx context.Context, report *Report, batchID string,
 ) (*ExecutionSummary, error) {
@@ -842,10 +785,7 @@ func (e *Engine) Execute(
 		"account", e.config.Account,
 		"groups", report.DuplicateGroups,
 		"messages_to_prune", report.DuplicateMessages,
-		"stage_remote_deletion", e.config.DeleteDupsFromSourceServer,
 	)
-
-	remoteByKey := make(map[remoteKey][]string)
 
 	for i, group := range report.Groups {
 		if ctx.Err() != nil {
@@ -860,24 +800,6 @@ func (e *Engine) Execute(
 				continue
 			}
 			dupIDs = append(dupIDs, m.ID)
-
-			if !e.config.DeleteDupsFromSourceServer {
-				continue
-			}
-			if !remoteSourceTypes[m.SourceType] {
-				continue
-			}
-			if m.SourceID != survivor.SourceID {
-				continue
-			}
-			acct := m.SourceIdentifier
-			if acct == "" {
-				acct = e.config.Account
-			}
-			key := remoteKey{Account: acct, SourceType: m.SourceType}
-			remoteByKey[key] = append(
-				remoteByKey[key], m.SourceMessageID,
-			)
 		}
 
 		mergeResult, err := e.store.MergeDuplicates(
@@ -895,99 +817,15 @@ func (e *Engine) Execute(
 		summary.RawMIMEBackfilled += mergeResult.RawMIMEBackfilled
 	}
 
-	if e.config.DeleteDupsFromSourceServer && len(remoteByKey) > 0 {
-		staged, err := e.stageDeletionManifests(batchID, remoteByKey)
-		if err != nil {
-			return summary, err
-		}
-		summary.StagedManifests = staged
-	}
-
 	e.logger.Info("dedup execute done",
 		"batch", batchID,
 		"groups_merged", summary.GroupsMerged,
 		"messages_removed", summary.MessagesRemoved,
 		"labels_transferred", summary.LabelsTransferred,
 		"raw_mime_backfilled", summary.RawMIMEBackfilled,
-		"staged_manifests", len(summary.StagedManifests),
 		"duration_ms", time.Since(started).Milliseconds(),
 	)
 	return summary, nil
-}
-
-func (e *Engine) stageDeletionManifests(
-	batchID string,
-	byKey map[remoteKey][]string,
-) ([]StagedManifest, error) {
-	if e.config.DeletionsDir == "" {
-		return nil, fmt.Errorf(
-			"deletions dir not configured but " +
-				"DeleteDupsFromSourceServer is true",
-		)
-	}
-
-	mgr, err := deletion.NewManager(e.config.DeletionsDir)
-	if err != nil {
-		return nil, fmt.Errorf("open deletion manager: %w", err)
-	}
-
-	keys := make([]remoteKey, 0, len(byKey))
-	for k := range byKey {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].Account != keys[j].Account {
-			return keys[i].Account < keys[j].Account
-		}
-		return keys[i].SourceType < keys[j].SourceType
-	})
-
-	// Single-type accounts keep the original manifest ID (no source-type
-	// suffix) so existing consumers — and test fixtures — don't see a
-	// rename. Only accounts contributing duplicates from more than one
-	// source type need disambiguation.
-	typesPerAccount := make(map[string]int)
-	for k := range byKey {
-		typesPerAccount[k.Account]++
-	}
-
-	var staged []StagedManifest
-	for _, k := range keys {
-		ids := dedupStrings(byKey[k])
-		if len(ids) == 0 {
-			continue
-		}
-
-		description := fmt.Sprintf("Dedup pruned duplicates (%s)", batchID)
-		manifest := deletion.NewManifest(description, ids)
-		if typesPerAccount[k.Account] > 1 {
-			manifest.ID = manifestIDFor(batchID, k.Account+"-"+k.SourceType)
-		} else {
-			manifest.ID = manifestIDFor(batchID, k.Account)
-		}
-		manifest.CreatedBy = "dedup"
-		manifest.Filters.Account = k.Account
-
-		path := filepath.Join(
-			mgr.PendingDir(), manifest.ID+".json",
-		)
-		if err := manifest.Save(path); err != nil {
-			return staged, fmt.Errorf(
-				"save manifest for %s: %w", k.Account, err,
-			)
-		}
-		staged = append(staged, StagedManifest{
-			Account:      k.Account,
-			SourceType:   k.SourceType,
-			ManifestID:   manifest.ID,
-			MessageCount: len(ids),
-		})
-	}
-	return staged, nil
-}
-
-func manifestIDFor(batchID, account string) string {
-	return fmt.Sprintf("%s-%s", batchID, SanitizeFilenameComponent(account))
 }
 
 // SanitizeFilenameComponent strips or replaces characters that are unsafe
@@ -1015,28 +853,12 @@ func SanitizeFilenameComponent(a string) string {
 	return s
 }
 
-func dedupStrings(in []string) []string {
-	seen := make(map[string]bool, len(in))
-	out := make([]string, 0, len(in))
-	for _, s := range in {
-		if seen[s] {
-			continue
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	sort.Strings(out)
-	return out
-}
-
-// Undo restores every message with the given batch ID and cancels any
-// pending deletion manifests that dedup created for that batch.
+// Undo restores every locally-hidden message with the given batch ID.
 //
-// Manifest cancellation is best-effort: if cancelling one manifest
-// fails, the remaining manifests are still attempted, and any errors
-// are joined into a single returned error alongside the restored row
-// count and the list of manifests already in progress.
-func (e *Engine) Undo(batchID string) (int64, []string, error) {
+// This fork (read-only edition) does not stage remote deletions, so
+// undo only needs to clear the local soft-delete state — there are no
+// pending manifests to cancel.
+func (e *Engine) Undo(batchID string) (int64, error) {
 	started := time.Now()
 	e.logger.Info("dedup undo start", "batch", batchID)
 
@@ -1047,67 +869,15 @@ func (e *Engine) Undo(batchID string) (int64, []string, error) {
 			"duration_ms", time.Since(started).Milliseconds(),
 			"error", err.Error(),
 		)
-		return 0, nil, err
+		return 0, err
 	}
 
-	if e.config.DeletionsDir == "" {
-		e.logger.Info("dedup undo done",
-			"batch", batchID,
-			"restored", restored,
-			"manifests_cancelled", 0,
-			"manifests_still_running", 0,
-			"duration_ms", time.Since(started).Milliseconds(),
-		)
-		return restored, nil, nil
-	}
-
-	mgr, err := deletion.NewManager(e.config.DeletionsDir)
-	if err != nil {
-		return restored, nil, fmt.Errorf("open deletion manager: %w", err)
-	}
-	pending, err := mgr.ListPending()
-	if err != nil {
-		return restored, nil, fmt.Errorf("list pending: %w", err)
-	}
-	inProgress, err := mgr.ListInProgress()
-	if err != nil {
-		return restored, nil, fmt.Errorf("list in-progress: %w", err)
-	}
-
-	var stillExecuting []string
-	var cancelErrs []error
-	cancelled := 0
-	prefix := batchID + "-"
-	for _, m := range pending {
-		if !strings.HasPrefix(m.ID, prefix) {
-			continue
-		}
-		if err := mgr.CancelManifest(m.ID); err != nil {
-			cancelErrs = append(cancelErrs, fmt.Errorf(
-				"cancel manifest %s: %w", m.ID, err,
-			))
-			continue
-		}
-		cancelled++
-	}
-	for _, m := range inProgress {
-		if !strings.HasPrefix(m.ID, prefix) {
-			continue
-		}
-		stillExecuting = append(stillExecuting, m.ID)
-	}
 	e.logger.Info("dedup undo done",
 		"batch", batchID,
 		"restored", restored,
-		"manifests_cancelled", cancelled,
-		"manifests_still_running", len(stillExecuting),
-		"cancel_errors", len(cancelErrs),
 		"duration_ms", time.Since(started).Milliseconds(),
 	)
-	if len(cancelErrs) > 0 {
-		return restored, stillExecuting, errors.Join(cancelErrs...)
-	}
-	return restored, stillExecuting, nil
+	return restored, nil
 }
 
 // FormatReport renders a human-readable report of the scan results.

@@ -142,6 +142,11 @@ in a single binary.`,
 		logger.Debug("msgvault startup args",
 			"args", sanitizeArgs(args),
 		)
+
+		// One-time housekeeping for users upgrading from the
+		// writeable edition of msgvault to this read-only fork.
+		runReadonlyMigrations(cfg.HomeDir)
+
 		return nil
 	},
 	// Note: log file closing is handled by ExecuteContext's deferred

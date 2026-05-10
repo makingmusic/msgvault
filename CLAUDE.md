@@ -60,7 +60,6 @@ internal/
 ├── imessage/                 iMessage (chat.db; attributedBody parsing)
 ├── whatsapp/                 WhatsApp export
 ├── textimport/               Generic text-message helpers (phone normalisation)
-├── deletion/                 Staged-deletion manifest store + executor
 ├── mime/                     enmime + chardet wrappers
 ├── textutil/                 Charset / encoding helpers
 ├── fileutil/                 Cross-OS secure file modes (chmod 600)
@@ -105,9 +104,14 @@ All under `~/.msgvault/` (override with `MSGVAULT_HOME`):
 - `attachments/<2>/<sha256>` — content-addressed binaries
 - `tokens/<email>.json` — OAuth tokens, chmod 600
 - `analytics/year=YYYY/` — Parquet, partitioned by year
-- `deletions/{pending,completed,failed,cancelled}/` — manifest staging
 - `tmp/` — fallback temp dir (use `config.MkTempDir`, never `os.MkdirTemp("")`)
 - `config.toml` — optional config
+
+This is the **read-only edition** of msgvault. The `internal/deletion/`
+subsystem and the `~/.msgvault/deletions/` directory used by upstream
+do not exist here. The `prune-local` command (renamed from
+`delete-deduped` in the upstream) operates only on the local SQLite
+archive and never touches any remote mailbox.
 
 ## Working in this repo — invariants and rules
 
@@ -169,12 +173,15 @@ rebind. `subset.go` is intentionally SQLite-only.
 - **`errDuplicateRFC822` rewrites composite IDs in place** when IMAP messages move between mailboxes (INBOX → Trash) — the syncer detects the duplicate by RFC822 Message-ID and updates rather than re-downloading.
 - **IMAP forces `NoResume=true`**; resume is cheap because `MessageExistsWithRawBatch` skips already-imported messages.
 
-## Deletion safety
+## Read-only edition guarantees
 
-- The **directory** under `~/.msgvault/deletions/` is authoritative — it wins over the inline `Status` field. `CancelManifest` renames before rewriting the field; a crash between the two leaves the file in `cancelled/` with `Status: pending` and the directory wins.
-- `Execute` (per-message) lands in `failed/` only when **all** messages failed.
-- `ExecuteBatch` always lands in `completed/` even with partial failures, because batch semantics expect partial progress. On resume it retries previous failures before continuing.
-- Permanent delete (vs Trash) requires the `https://mail.google.com/` Gmail scope or DWD equivalent.
+- **OAuth scopes**: only `https://www.googleapis.com/auth/gmail.readonly`. See `internal/oauth/oauth.go`. The regression test `internal/oauth/scopes_test.go` fails the build if anything else is added.
+- **No Gmail write methods**: the Gmail client has no `TrashMessage`, `DeleteMessage`, `BatchDeleteMessages`. The `MessageDeleter` interface is removed.
+- **No IMAP write methods**: the IMAP client has no `TrashMessage`, `DeleteMessage`. No `STORE \Deleted`, `EXPUNGE`, or `MOVE` issued.
+- **`BODY.PEEK[]` only on IMAP fetches**: `internal/imap/no_body_fetch_test.go` source-greps for `BODY[` and fails the build if reintroduced (would silently mark messages as read on the server).
+- **No deletion subsystem**: `internal/deletion/` package and CLI commands (`delete-staged`, `list-deletions`, `show-deletion`, `cancel-deletion`) do not exist. The TUI's `d`/`D` keys show a banner explaining the build is read-only.
+- **One remote-mutation surface, scoped to the user's own credential**: `microsoft.Manager.RevokeOwnToken` (used by `remove-account`) revokes the user's own OAuth refresh token at Microsoft. No mailbox content is ever touched.
+- **`prune-local`** removes locally-deduplicated rows from the SQLite archive. Local only; no remote API call.
 
 ## TUI invariants
 

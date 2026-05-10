@@ -228,9 +228,8 @@ Examples:
 // buildAPIClient creates the appropriate gmail.API client for the given
 // source. saScopes is used when the resolved oauth_app is backed by a
 // service account key; for browser-OAuth sources, scopes flow through the
-// caller-provided getOAuthMgr factory. Pass nil to use oauth.Scopes; pass
-// oauth.ScopesDeletion (or another set) for workflows that need elevated
-// access.
+// caller-provided getOAuthMgr factory. Pass nil to use oauth.Scopes
+// (gmail.readonly).
 func buildAPIClient(ctx context.Context, src *store.Source, getOAuthMgr func(string) (*oauth.Manager, error), saScopes []string) (gmail.API, error) {
 	switch src.SourceType {
 	case "gmail", "":

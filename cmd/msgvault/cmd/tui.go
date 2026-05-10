@@ -43,11 +43,11 @@ Navigation:
   r           Reverse sort direction
   t           Toggle time granularity (Time view only)
 
-Selection & Deletion:
+Selection:
   Space       Toggle selection
   A           Select all visible
   x           Clear selection
-  D           Stage selected for deletion
+  d/D         Show read-only-edition notice (deletion is disabled)
   q           Quit
 
 Performance:
@@ -57,7 +57,8 @@ Performance:
 
 Remote Mode:
   When [remote].url is configured, the TUI connects to a remote msgvault server.
-  Use --local to force local database. Deletion and export are disabled in remote mode.`,
+  Use --local to force local database. Attachment export is disabled in remote
+  mode. (Deletion is disabled regardless of mode in this read-only edition.)`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var engine query.Engine
 		var isRemote bool

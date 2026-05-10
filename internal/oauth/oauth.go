@@ -24,16 +24,14 @@ import (
 	"golang.org/x/oauth2/google"
 )
 
-// Scopes for normal msgvault operations (sync, search, read).
+// Scopes for msgvault operations (sync, search, read).
+//
+// This is the read-only edition of msgvault: it requests gmail.readonly
+// only and contains no code that can mutate any remote mailbox. The
+// requested scope set must remain a strict subset of what the user's
+// Google Cloud OAuth client allows. See plans/readonly-conversion.md.
 var Scopes = []string{
 	"https://www.googleapis.com/auth/gmail.readonly",
-	"https://www.googleapis.com/auth/gmail.modify",
-}
-
-// ScopesDeletion includes full access required for batchDelete API.
-// gmail.modify supports trash/untrash but NOT batchDelete.
-var ScopesDeletion = []string{
-	"https://mail.google.com/",
 }
 
 const defaultProfileURL = "https://gmail.googleapis.com/gmail/v1/users/me/profile"

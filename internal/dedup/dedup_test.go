@@ -3,12 +3,10 @@ package dedup_test
 import (
 	"context"
 	"database/sql"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/wesm/msgvault/internal/dedup"
-	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/store"
 	"github.com/wesm/msgvault/internal/testutil"
 	"github.com/wesm/msgvault/internal/testutil/storetest"
@@ -180,116 +178,57 @@ func TestEngine_SurvivorFavorsSentCopy(t *testing.T) {
 	}
 }
 
-func TestEngine_DefaultConfig_NeverStagesRemote(t *testing.T) {
+// TestEngine_LocalDedupAndUndo_NoRemoteSurface verifies that this fork's
+// dedup engine performs only local soft-deletion and that Undo restores
+// the locally-hidden rows. There is no remote-staging surface in the
+// read-only edition.
+func TestEngine_LocalDedupAndUndo_NoRemoteSurface(t *testing.T) {
 	f := storetest.New(t)
 	st := f.Store
 	gmail := f.Source
 
-	_ = addMessage(t, st, gmail, "g-1", "rfc-default", false)
-	_ = addMessage(t, st, gmail, "g-2", "rfc-default", false)
+	idA := addMessage(t, st, gmail, "g-1", "rfc-local", false)
+	idB := addMessage(t, st, gmail, "g-2", "rfc-local", false)
 
-	deletionsDir := filepath.Join(t.TempDir(), "deletions")
 	eng := dedup.NewEngine(st, dedup.Config{
 		AccountSourceIDs: []int64{gmail.ID},
 		Account:          "test@example.com",
-		DeletionsDir:     deletionsDir,
 	}, nil)
 
 	report, err := eng.Scan(context.Background())
 	testutil.MustNoErr(t, err, "Scan")
 	summary, err := eng.Execute(
-		context.Background(), report, "batch-default",
+		context.Background(), report, "batch-local",
 	)
 	testutil.MustNoErr(t, err, "Execute")
 
 	if summary.MessagesRemoved != 1 {
 		t.Errorf("messagesRemoved = %d, want 1", summary.MessagesRemoved)
 	}
-	if len(summary.StagedManifests) != 0 {
-		t.Errorf("stagedManifests = %d, want 0", len(summary.StagedManifests))
+
+	// Exactly one of the two messages should be soft-deleted; the other
+	// is the survivor. We don't assert which (survivor selection has its
+	// own tiebreakers) — only that the totals match.
+	deleted := 0
+	for _, id := range []int64{idA, idB} {
+		var dt sql.NullTime
+		err := st.DB().QueryRow(
+			st.Rebind("SELECT deleted_at FROM messages WHERE id = ?"),
+			id,
+		).Scan(&dt)
+		testutil.MustNoErr(t, err, "scan deleted_at")
+		if dt.Valid {
+			deleted++
+		}
+	}
+	if deleted != 1 {
+		t.Errorf("soft-deleted count = %d, want 1", deleted)
 	}
 
-	mgr, err := deletion.NewManager(deletionsDir)
-	testutil.MustNoErr(t, err, "NewManager")
-	pending, err := mgr.ListPending()
-	testutil.MustNoErr(t, err, "ListPending")
-	if len(pending) != 0 {
-		t.Errorf("pending manifests = %d, want 0", len(pending))
-	}
-}
-
-func TestEngine_OptIn_StagesOnlyWithinSameSourceID(t *testing.T) {
-	f := storetest.New(t)
-	st := f.Store
-	gmail := f.Source
-
-	otherGmail, err := st.GetOrCreateSource("gmail", "other@example.com")
-	testutil.MustNoErr(t, err, "GetOrCreateSource otherGmail")
-	mbox, err := st.GetOrCreateSource("mbox", "local.mbox")
-	testutil.MustNoErr(t, err, "GetOrCreateSource mbox")
-
-	idWinner := addMessage(t, st, gmail, "g-1", "rfc-opt", false)
-	idLoser := addMessage(t, st, gmail, "g-2", "rfc-opt", false)
-	idOther := addMessage(t, st, otherGmail, "g-3", "rfc-opt", false)
-	idMbox := addMessage(t, st, mbox, "m-1", "rfc-opt", false)
-
-	deletionsDir := filepath.Join(t.TempDir(), "deletions")
-	eng := dedup.NewEngine(st, dedup.Config{
-		AccountSourceIDs:           []int64{gmail.ID, otherGmail.ID, mbox.ID},
-		Account:                    "pile",
-		DeleteDupsFromSourceServer: true,
-		DeletionsDir:               deletionsDir,
-	}, nil)
-
-	report, err := eng.Scan(context.Background())
-	testutil.MustNoErr(t, err, "Scan")
-	summary, err := eng.Execute(
-		context.Background(), report, "batch-opt",
-	)
-	testutil.MustNoErr(t, err, "Execute")
-
-	if summary.MessagesRemoved != 3 {
-		t.Errorf("messagesRemoved = %d, want 3", summary.MessagesRemoved)
-	}
-	assertSoftDeleted(t, st, idWinner, false)
-	assertSoftDeleted(t, st, idLoser, true)
-	assertSoftDeleted(t, st, idOther, true)
-	assertSoftDeleted(t, st, idMbox, true)
-
-	if len(summary.StagedManifests) != 1 {
-		t.Fatalf("stagedManifests = %d, want 1", len(summary.StagedManifests))
-	}
-	sm := summary.StagedManifests[0]
-	if sm.Account != "test@example.com" {
-		t.Errorf("staged account = %q, want test@example.com", sm.Account)
-	}
-	if sm.MessageCount != 1 {
-		t.Errorf("staged count = %d, want 1", sm.MessageCount)
-	}
-
-	mgr, err := deletion.NewManager(deletionsDir)
-	testutil.MustNoErr(t, err, "NewManager")
-	pending, err := mgr.ListPending()
-	testutil.MustNoErr(t, err, "ListPending")
-	if len(pending) != 1 {
-		t.Fatalf("pending = %d, want 1", len(pending))
-	}
-	if len(pending[0].GmailIDs) != 1 || pending[0].GmailIDs[0] != "g-2" {
-		t.Errorf("manifest GmailIDs = %v, want [g-2]", pending[0].GmailIDs)
-	}
-
-	restored, stillExec, err := eng.Undo("batch-opt")
+	restored, err := eng.Undo("batch-local")
 	testutil.MustNoErr(t, err, "Undo")
-	if restored != 3 {
-		t.Errorf("restored = %d, want 3", restored)
-	}
-	if len(stillExec) != 0 {
-		t.Errorf("stillExec = %v, want empty", stillExec)
-	}
-	pending, err = mgr.ListPending()
-	testutil.MustNoErr(t, err, "ListPending after undo")
-	if len(pending) != 0 {
-		t.Errorf("pending after undo = %d, want 0", len(pending))
+	if restored != 1 {
+		t.Errorf("restored = %d, want 1", restored)
 	}
 }
 

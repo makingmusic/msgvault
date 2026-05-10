@@ -644,11 +644,16 @@ func (m *Manager) HasToken(email string) bool {
 	return err == nil
 }
 
-// DeleteToken revokes the refresh token at Microsoft (best-effort) and
-// removes the local token file. Revocation failures are logged but do not
-// prevent local cleanup — the user's intent is to remove the account, and
-// a stale remote token will expire naturally (≤90 days).
-func (m *Manager) DeleteToken(email string) error {
+// RevokeOwnToken revokes this client's own refresh token at Microsoft
+// (best-effort) and removes the local token file. The remote call only
+// invalidates the user's own credential — it never touches mailbox
+// content. Revocation failures are logged but do not prevent local
+// cleanup; a stale remote token will expire naturally (≤90 days).
+//
+// This is the only remote call this fork makes that has a side effect
+// on Microsoft's servers. It exists so `msgvault remove-account` can
+// log the user out cleanly. See plans/readonly-conversion.md §4.
+func (m *Manager) RevokeOwnToken(email string) error {
 	// Attempt to revoke the refresh token at Microsoft before deleting
 	// the local file. We load the token first so we can send the
 	// revocation request.

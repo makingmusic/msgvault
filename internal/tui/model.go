@@ -10,7 +10,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/wesm/msgvault/internal/deletion"
 	"github.com/wesm/msgvault/internal/query"
 	"github.com/wesm/msgvault/internal/search"
 	"github.com/wesm/msgvault/internal/update"
@@ -53,7 +52,8 @@ type Options struct {
 	ThreadMessageLimit int
 
 	// IsRemote indicates the TUI is connected to a remote server.
-	// Some features (deletion staging, attachment export) are disabled in remote mode.
+	// Attachment export is disabled in remote mode. (Deletion is
+	// disabled regardless of mode in this read-only edition.)
 	IsRemote bool
 
 	// TextEngine provides text message query operations.
@@ -66,8 +66,6 @@ type modalType int
 
 const (
 	modalNone modalType = iota
-	modalDeleteConfirm
-	modalDeleteResult
 	modalAccountSelector
 	modalFilterToggle
 	modalExportAttachments
@@ -125,7 +123,7 @@ type Model struct {
 	aggregateLimit     int
 	threadMessageLimit int
 
-	// Remote mode (disables deletion/export)
+	// Remote mode (disables attachment export)
 	isRemote bool
 
 	// Navigation
@@ -151,13 +149,12 @@ type Model struct {
 	selection selectionState
 
 	// Modal state
-	modal           modalType
-	modalCursor     int                // Cursor position within modal (for selector modals)
-	modalResult     string             // Result message to display
-	helpScroll      int                // Scroll offset for help modal
-	pendingManifest *deletion.Manifest // Manifest being confirmed
+	modal       modalType
+	modalCursor int    // Cursor position within modal (for selector modals)
+	modalResult string // Result message to display
+	helpScroll  int    // Scroll offset for help modal
 
-	// Action controller (deletion, export)
+	// Action controller (export). Deletion is removed in this read-only edition.
 	actions *ActionController
 
 	// Terminal dimensions
@@ -242,7 +239,7 @@ func New(engine query.Engine, opts Options) Model {
 	return Model{
 		engine:             engine,
 		textEngine:         textEngine,
-		actions:            NewActionController(engine, opts.DataDir, nil),
+		actions:            NewActionController(engine, opts.DataDir),
 		version:            opts.Version,
 		aggregateLimit:     aggLimit,
 		threadMessageLimit: threadLimit,
@@ -1412,59 +1409,12 @@ func (m *Model) updateDetailLineCount() {
 
 // handleModalKeys handles keys when a modal is displayed.
 
-// stageForDeletion prepares messages for deletion via the ActionController.
-func (m Model) stageForDeletion() (tea.Model, tea.Cmd) {
-	var drillFilter *query.MessageFilter
-	if m.hasDrillFilter() {
-		f := m.drillFilter
-		drillFilter = &f
-	}
-	manifest, err := m.actions.StageForDeletion(DeletionContext{
-		AggregateSelection: m.selection.aggregateKeys,
-		MessageSelection:   m.selection.messageIDs,
-		AggregateViewType:  m.selection.aggregateViewType,
-		AccountFilter:      m.accountFilter,
-		Accounts:           m.accounts,
-		TimeGranularity:    m.timeGranularity,
-		Messages:           m.messages,
-		DrillFilter:        drillFilter,
-	})
-	if err != nil {
-		m.modal = modalDeleteResult
-		m.modalResult = err.Error()
-		return m, nil
-	}
-	m.pendingManifest = manifest
-	m.modal = modalDeleteConfirm
-	return m, nil
-}
-
-// confirmDeletion saves the manifest and shows result.
-func (m Model) confirmDeletion() (tea.Model, tea.Cmd) {
-	if m.pendingManifest == nil {
-		m.modal = modalNone
-		return m, nil
-	}
-
-	// Save manifest via ActionController
-	if err := m.actions.SaveManifest(m.pendingManifest); err != nil {
-		m.modal = modalDeleteResult
-		m.modalResult = fmt.Sprintf("Error: %v", err)
-		m.pendingManifest = nil
-		return m, nil
-	}
-
-	// Show success
-	m.modal = modalDeleteResult
-	m.modalResult = fmt.Sprintf("Staged %d messages for deletion.\nBatch ID: %s\nInspect: msgvault delete-staged --list\nExecute: MSGVAULT_ENABLE_REMOTE_DELETE=1 msgvault delete-staged",
-		len(m.pendingManifest.GmailIDs), m.pendingManifest.ID)
-
-	// Clear selection
-	m.selection.aggregateKeys = make(map[string]bool)
-	m.selection.messageIDs = make(map[int64]bool)
-	m.pendingManifest = nil
-
-	return m, nil
+// showReadOnlyNotice surfaces a transient banner explaining that this
+// build of msgvault is the read-only edition and cannot mutate any
+// remote mailbox. Bound to `d`/`D` as the discovery affordance for
+// users muscle-memorying the old "stage for deletion" gesture.
+func (m Model) showReadOnlyNotice() (tea.Model, tea.Cmd) {
+	return m.showFlash("Read-only edition: deletion is disabled. This build of msgvault cannot trash or delete email on any remote server. For deletion, use upstream msgvault.")
 }
 
 // hasSelection returns true if any items are selected.

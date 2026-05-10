@@ -1,11 +1,19 @@
-# msgvault
+# msgvault — read-only edition
 
 [![Go 1.25+](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://go.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Docs](https://img.shields.io/badge/Docs-msgvault.io-blue)](https://msgvault.io)
-[![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/fDnmxB8Wkq)
 
-[Documentation](https://msgvault.io) · [Setup Guide](https://msgvault.io/guides/oauth-setup/) · [Interactive TUI](https://msgvault.io/usage/tui/)
+> **This is a fork of upstream msgvault that is structurally incapable
+> of modifying any remote email server.** It only reads. The binary
+> contains no code that can trash, delete, label, flag, or send email
+> on Gmail, IMAP, or Microsoft 365. The OAuth scope it requests is
+> exactly `https://www.googleapis.com/auth/gmail.readonly`.
+>
+> If you need write capability, use upstream
+> [wesm/msgvault](https://github.com/wesm/msgvault) instead. This fork
+> exists for users who want a strictly read-only email backup tool
+> they can hand to anyone, including someone non-technical, without
+> worrying about accidental data loss on the remote server.
 
 > **Alpha software.** APIs, storage format, and CLI flags may change without notice. Back up your data.
 
@@ -173,7 +181,7 @@ Workspace admins can use a Google service account with domain-wide delegation in
 service_account_key = "/secure/path/service-account.json"
 ```
 
-In Google Admin Console, authorize the service account client for `https://www.googleapis.com/auth/gmail.readonly` and `https://www.googleapis.com/auth/gmail.modify`. If you will run `delete-staged` with permanent deletion, also authorize `https://mail.google.com/`. Keep the key file owner-only, for example `chmod 600 /secure/path/service-account.json`.
+In Google Admin Console, authorize the service account client for `https://www.googleapis.com/auth/gmail.readonly` only. This fork never requests write scopes (`gmail.modify`, `https://mail.google.com/`); authorizing them would have no effect. Keep the key file owner-only, for example `chmod 600 /secure/path/service-account.json`.
 
 ```bash
 msgvault add-account you@acme.com --oauth-app acme

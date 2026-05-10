@@ -365,25 +365,6 @@ func assertModalCleared(t *testing.T, m Model) {
 	}
 }
 
-// assertPendingManifestCleared checks that pendingManifest is nil.
-func assertPendingManifestCleared(t *testing.T, m Model) {
-	t.Helper()
-	if m.pendingManifest != nil {
-		t.Error("expected pendingManifest to be nil")
-	}
-}
-
-// assertPendingManifestGmailIDs checks that pendingManifest has the expected number of Gmail IDs.
-func assertPendingManifestGmailIDs(t *testing.T, m Model, expectedCount int) {
-	t.Helper()
-	if m.pendingManifest == nil {
-		t.Fatal("expected pendingManifest to be set")
-	}
-	if len(m.pendingManifest.GmailIDs) != expectedCount {
-		t.Errorf("expected %d Gmail IDs, got %d", expectedCount, len(m.pendingManifest.GmailIDs))
-	}
-}
-
 // assertSelectionViewTypeMatches checks that aggregateViewType matches the model's viewType.
 func assertSelectionViewTypeMatches(t *testing.T, m Model) {
 	t.Helper()
@@ -629,18 +610,6 @@ func selectRow(t *testing.T, m Model, index int) Model {
 	t.Helper()
 	m.cursor = index
 	return applyAggregateKey(t, m, key(' '))
-}
-
-// assertPendingManifest asserts that pendingManifest is non-nil and its Account
-// filter matches wantAccount.
-func assertPendingManifest(t *testing.T, m Model, wantAccount string) {
-	t.Helper()
-	if m.pendingManifest == nil {
-		t.Fatal("expected pendingManifest to be set")
-	}
-	if m.pendingManifest.Filters.Account != wantAccount {
-		t.Errorf("expected manifest account=%q, got %q", wantAccount, m.pendingManifest.Filters.Account)
-	}
 }
 
 // applyAggregateKey sends a key through handleAggregateKeys and returns the concrete Model.

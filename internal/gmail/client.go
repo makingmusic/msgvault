@@ -538,42 +538,5 @@ func mapLabelChanges(changes []historyLabelChangeJSON) []HistoryLabelChange {
 	return out
 }
 
-// TrashMessage moves a message to trash.
-func (c *Client) TrashMessage(ctx context.Context, messageID string) error {
-	path := fmt.Sprintf("/users/%s/messages/%s/trash", c.userID, messageID)
-	_, err := c.request(ctx, OpMessagesTrash, "POST", path, nil)
-	return err
-}
-
-// DeleteMessage permanently deletes a message.
-func (c *Client) DeleteMessage(ctx context.Context, messageID string) error {
-	path := fmt.Sprintf("/users/%s/messages/%s", c.userID, messageID)
-	_, err := c.request(ctx, OpMessagesDelete, "DELETE", path, nil)
-	return err
-}
-
-// BatchDeleteMessages permanently deletes multiple messages.
-func (c *Client) BatchDeleteMessages(ctx context.Context, messageIDs []string) error {
-	if len(messageIDs) == 0 {
-		return nil
-	}
-	if len(messageIDs) > 1000 {
-		return fmt.Errorf("batch delete limited to 1000 messages, got %d", len(messageIDs))
-	}
-
-	body := struct {
-		IDs []string `json:"ids"`
-	}{IDs: messageIDs}
-
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshal body: %w", err)
-	}
-
-	path := fmt.Sprintf("/users/%s/messages/batchDelete", c.userID)
-	_, err = c.request(ctx, OpMessagesBatchDelete, "POST", path, bodyBytes)
-	return err
-}
-
 // Ensure Client implements API interface.
 var _ API = (*Client)(nil)

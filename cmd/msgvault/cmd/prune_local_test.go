@@ -8,14 +8,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// TestDeleteDeduped_NeitherFlag verifies that omitting both --batch and
+// TestPruneLocal_NeitherFlag verifies that omitting both --batch and
 // --all-hidden produces an error mentioning both flag names.
-func TestDeleteDeduped_NeitherFlag(t *testing.T) {
+func TestPruneLocal_NeitherFlag(t *testing.T) {
 	var batch []string
 	var allHidden bool
-	cmd := &cobra.Command{Use: "delete-test", SilenceErrors: true}
+	cmd := &cobra.Command{Use: "prune-test", SilenceErrors: true}
 	sub := &cobra.Command{
-		Use: "delete-deduped",
+		Use: "prune-local",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(batch) == 0 && !allHidden {
 				return fmt.Errorf("must specify --batch or --all-hidden")
@@ -27,7 +27,7 @@ func TestDeleteDeduped_NeitherFlag(t *testing.T) {
 	sub.Flags().BoolVar(&allHidden, "all-hidden", false, "")
 	sub.MarkFlagsMutuallyExclusive("batch", "all-hidden")
 	cmd.AddCommand(sub)
-	cmd.SetArgs([]string{"delete-deduped"})
+	cmd.SetArgs([]string{"prune-local"})
 
 	err := cmd.Execute()
 	if err == nil {
@@ -39,18 +39,18 @@ func TestDeleteDeduped_NeitherFlag(t *testing.T) {
 	}
 }
 
-// TestDeleteDeduped_MutualExclusion verifies that passing both --batch and
+// TestPruneLocal_MutualExclusion verifies that passing both --batch and
 // --all-hidden is rejected by cobra.
-func TestDeleteDeduped_MutualExclusion(t *testing.T) {
+func TestPruneLocal_MutualExclusion(t *testing.T) {
 	var batch []string
 	var allHidden bool
-	cmd := &cobra.Command{Use: "delete-test", SilenceErrors: true}
-	sub := &cobra.Command{Use: "delete-deduped", RunE: func(cmd *cobra.Command, args []string) error { return nil }}
+	cmd := &cobra.Command{Use: "prune-test", SilenceErrors: true}
+	sub := &cobra.Command{Use: "prune-local", RunE: func(cmd *cobra.Command, args []string) error { return nil }}
 	sub.Flags().StringArrayVar(&batch, "batch", nil, "")
 	sub.Flags().BoolVar(&allHidden, "all-hidden", false, "")
 	sub.MarkFlagsMutuallyExclusive("batch", "all-hidden")
 	cmd.AddCommand(sub)
-	cmd.SetArgs([]string{"delete-deduped", "--batch", "some-id", "--all-hidden"})
+	cmd.SetArgs([]string{"prune-local", "--batch", "some-id", "--all-hidden"})
 
 	err := cmd.Execute()
 	if err == nil {

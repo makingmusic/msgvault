@@ -84,7 +84,7 @@ func TestHasToken(t *testing.T) {
 	}
 }
 
-func TestDeleteToken(t *testing.T) {
+func TestRevokeOwnToken(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{tokensDir: dir}
 
@@ -92,15 +92,15 @@ func TestDeleteToken(t *testing.T) {
 	if err := m.saveToken("user@example.com", token, nil, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.DeleteToken("user@example.com"); err != nil {
+	if err := m.RevokeOwnToken("user@example.com"); err != nil {
 		t.Fatal(err)
 	}
 	if m.HasToken("user@example.com") {
-		t.Error("HasToken should be false after delete")
+		t.Error("HasToken should be false after RevokeOwnToken")
 	}
-	// Delete non-existent should not error
-	if err := m.DeleteToken("nobody@example.com"); err != nil {
-		t.Errorf("DeleteToken non-existent: %v", err)
+	// Revoking non-existent should not error
+	if err := m.RevokeOwnToken("nobody@example.com"); err != nil {
+		t.Errorf("RevokeOwnToken non-existent: %v", err)
 	}
 }
 
@@ -989,9 +989,9 @@ func TestRedactAuthURL_InvalidURL(t *testing.T) {
 	}
 }
 
-// --- DeleteToken with revocation ---
+// --- RevokeOwnToken with revocation ---
 
-func TestDeleteToken_RevokesBeforeDeleting(t *testing.T) {
+func TestRevokeOwnToken_RevokesBeforeDeleting(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{
 		clientID:  "test-client",
@@ -1009,17 +1009,17 @@ func TestDeleteToken_RevokesBeforeDeleting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// DeleteToken should succeed even when revocation fails (no real
+	// RevokeOwnToken should succeed even when revocation fails (no real
 	// Microsoft endpoint in tests). The local file should be removed.
-	if err := m.DeleteToken("user@example.com"); err != nil {
-		t.Fatalf("DeleteToken: %v", err)
+	if err := m.RevokeOwnToken("user@example.com"); err != nil {
+		t.Fatalf("RevokeOwnToken: %v", err)
 	}
 	if m.HasToken("user@example.com") {
-		t.Error("token file should be deleted after DeleteToken")
+		t.Error("token file should be deleted after RevokeOwnToken")
 	}
 }
 
-func TestDeleteToken_NoTokenFile(t *testing.T) {
+func TestRevokeOwnToken_NoTokenFile(t *testing.T) {
 	m := &Manager{
 		clientID:  "test-client",
 		tenantID:  "common",
@@ -1027,8 +1027,8 @@ func TestDeleteToken_NoTokenFile(t *testing.T) {
 		logger:    slog.Default(),
 	}
 	// Should not error on non-existent token
-	if err := m.DeleteToken("nobody@example.com"); err != nil {
-		t.Fatalf("DeleteToken non-existent: %v", err)
+	if err := m.RevokeOwnToken("nobody@example.com"); err != nil {
+		t.Fatalf("RevokeOwnToken non-existent: %v", err)
 	}
 }
 

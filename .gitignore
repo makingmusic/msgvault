@@ -45,3 +45,6 @@ result
 
 # Claude Code
 .claude/
+
+# Go installer tarballs (from local install)
+go*.linux-amd64.tar.gz

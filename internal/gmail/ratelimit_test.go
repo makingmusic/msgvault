@@ -182,9 +182,6 @@ func TestOperationCost(t *testing.T) {
 		{OpMessagesList, 5},
 		{OpLabelsList, 1},
 		{OpHistoryList, 2},
-		{OpMessagesTrash, 5},
-		{OpMessagesDelete, 10},
-		{OpMessagesBatchDelete, 50},
 		{OpProfile, 1},
 		{Operation(999), 1}, // Unknown operation defaults to 1
 	}
@@ -244,8 +241,8 @@ func TestRateLimiter_TryAcquire(t *testing.T) {
 
 	f.drain()
 
-	if f.rl.TryAcquire(OpMessagesBatchDelete) {
-		t.Error("TryAcquire(OpMessagesBatchDelete) should fail when bucket is empty")
+	if f.rl.TryAcquire(OpMessagesGetRaw) {
+		t.Error("TryAcquire(OpMessagesGetRaw) should fail when bucket is empty")
 	}
 }
 
@@ -293,7 +290,7 @@ func TestRateLimiter_Acquire_ContextTimeout(t *testing.T) {
 	}()
 	waitForTimers(t, f.clk, 1)
 
-	done := f.acquireAsync(t, ctx, OpMessagesBatchDelete)
+	done := f.acquireAsync(t, ctx, OpMessagesGetRaw)
 
 	// Advance mock clock past the cancel point
 	f.clk.Advance(100 * time.Millisecond)

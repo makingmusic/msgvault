@@ -7,6 +7,19 @@ in `internal/<pkg>/`.
 If something here disagrees with code or per-subsystem docs, the per-subsystem
 docs win — this file is synthesised from them and may drift.
 
+> **Read-only edition.** This is a fork of upstream msgvault that is
+> structurally incapable of mutating any remote mailbox. The
+> `internal/deletion/` subsystem, the deletion CLI commands
+> (`delete-staged`, `list-deletions`, `show-deletion`,
+> `cancel-deletion`), the MCP `stage_deletion` tool, the Gmail/IMAP
+> trash/delete client methods, and the `MessageDeleter` interface have
+> all been removed. Sections of this document that describe
+> "Mutation: staged deletion" and the deletions directory describe
+> upstream behaviour and do not apply to this fork. See
+> `plans/readonly-conversion.md` and `SECURITY.md` for the full list
+> of removed surfaces and the regression tests that lock the property
+> in place.
+
 ---
 
 ## What msgvault is

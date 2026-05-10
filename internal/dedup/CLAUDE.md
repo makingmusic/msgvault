@@ -13,22 +13,28 @@ package contains no SQL.
   on a survivor (union labels, backfill raw MIME, soft-delete losers
   with a batch ID), restore by batch ID, hard-delete batches.
 - `internal/dedup/dedup.go` — engine: orchestrates a scan, picks
-  survivors with a policy, writes deletion-staging manifests, formats
-  human-readable reports. Has no DB knowledge beyond calling `store`.
+  survivors with a policy, formats human-readable reports. Has no DB
+  knowledge beyond calling `store`.
+
+This is the **read-only edition**. Dedup affects only the local
+SQLite archive — there is no remote-deletion staging surface here.
+`Engine.Execute` soft-hides losers locally; `Engine.Undo` restores
+them. Permanent local removal is a separate command (`prune-local`).
 
 ## Key types
 
-- `Engine` (`dedup.go:148`) — owns `*store.Store`, `Config`, logger.
+- `Engine` (`dedup.go`) — owns `*store.Store`, `Config`, logger.
   Constructed via `NewEngine`.
-- `Config` (`dedup.go:63`) — `SourcePreference`, `DryRun`,
-  `ContentHashFallback`, `AccountSourceIDs`, `Account`,
-  `ScopeIsCollection`, `DeleteDupsFromSourceServer`, `DeletionsDir`,
-  `IdentityAddressesBySource`.
+- `Config` — `SourcePreference`, `DryRun`, `ContentHashFallback`,
+  `AccountSourceIDs`, `Account`, `ScopeIsCollection`,
+  `IdentityAddressesBySource`. (No `DeleteDupsFromSourceServer` /
+  `DeletionsDir` in this fork — those existed in upstream's
+  remote-deletion staging path, which is removed here.)
 - `DuplicateGroup` / `DuplicateMessage` — the in-memory representation
   of a candidate group plus survivor index. `DuplicateMessage.IsSentCopy`
   OR-combines three signals: Gmail SENT label, `messages.is_from_me`,
   identity-address match.
-- `Report`, `ExecutionSummary`, `StagedManifest` — public output shapes.
+- `Report`, `ExecutionSummary` — public output shapes.
 
 ## Public API
 
@@ -37,13 +43,11 @@ package contains no SQL.
   Message-ID; optional secondary pass groups by normalized raw-MIME
   hash (`scanNormalizedHashGroups`). Backfills missing
   `rfc822_message_id` from stored MIME first (skipped in dry-run).
-- `Engine.Execute(ctx, *Report, batchID)` — merges every group, soft-
-  deletes losers, writes per-(account, source_type) deletion manifests
-  under `Config.DeletionsDir` when `DeleteDupsFromSourceServer` is
-  on AND survivor and loser share a `source_id`.
-- `Engine.Undo(batchID)` — best-effort: clears `deleted_at` /
-  `delete_batch_id`, cancels matching pending manifests, returns
-  in-progress manifest IDs.
+- `Engine.Execute(ctx, *Report, batchID)` — merges every group and
+  soft-deletes losers locally. Returns the count and batch ID; no
+  remote-staging side effect.
+- `Engine.Undo(batchID) (int64, error)` — clears `deleted_at` /
+  `delete_batch_id` for the given batch. Returns the restored row count.
 - `Engine.FormatReport`, `Engine.FormatMethodology` — humans-only
   output.
 - `SanitizeFilenameComponent`, `DefaultSourcePreference` — exposed
@@ -55,11 +59,6 @@ package contains no SQL.
   with an error; the CLI iterates one source at a time when no
   `--account` is given. This is what keeps Sent-folder safety: dedup
   never crosses account boundaries unless `ScopeIsCollection` is true.
-- **Remote deletion staging is same-`source_id` only**, regardless of
-  scope. Even in collection mode, manifests are only written when the
-  surviving copy lives in the *same* remote mailbox as the loser.
-  Collection mode can hide cross-account losers locally but can never
-  propagate that to a remote server.
 - **Sent-copy filter overrides survivor selection.** When any message
   in a group looks like a sent copy, only sent copies are eligible
   survivors (`selectSurvivor`).
@@ -68,10 +67,7 @@ package contains no SQL.
   content-hash selection, the engine forces that survivor to win — the
   alternative would silently destroy labels already merged into it.
   Two MID survivors in one content-hash group skips the group; one MID
-  survivor + a sent-copy orphan also skips. (`dedup.go:417`)
-- **Only `gmail` is in `remoteSourceTypes`** today. `imap` is
-  intentionally excluded until staged manifests record source type and
-  there is an IMAP executor.
+  survivor + a sent-copy orphan also skips.
 
 ## Common gotchas
 
@@ -96,10 +92,10 @@ package contains no SQL.
 
 - Do not introduce SQL here. Add a new method on `*store.Store` and
   call it.
-- Do not relax the same-`source_id` rule for remote staging. It is the
-  guard that prevents accidental cross-account remote deletion.
+- Do not introduce a remote-deletion pathway. This fork is the
+  read-only edition: dedup must never propose, stage, or execute
+  deletions against any remote server. Local soft-delete (via
+  `MergeDuplicates`) is the only mutation surface.
 - Do not change the order of passes. The Message-ID pass must run
   first; the content-hash pass relies on `messageIDSurvivors` /
   `excludeIDs`.
-- Default `DeleteDupsFromSourceServer = false`. Never make remote
-  staging the default.

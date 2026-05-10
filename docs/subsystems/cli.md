@@ -81,16 +81,16 @@ declaration.
 | `stats` | `stats.go:15` | Print archive stats (counts, size). | local or remote store |
 | `tui` | `tui.go:24` | Bubble Tea TUI. Flags: `--account`, `--local`, `--force-sql`. Auto-builds Parquet cache when stale. | `internal/tui`, `internal/query` |
 
-### Deduplication and deletion
+### Deduplication and local pruning
+
+This is the read-only edition of msgvault. The remote-deletion commands
+(`delete-staged`, `list-deletions`, `show-deletion`, `cancel-deletion`)
+are removed; only local dedup and local pruning remain.
 
 | Command | File:line | Purpose & key flags | Touches |
 |---|---|---|---|
-| `deduplicate` (alias `dedup`, `dedupe`) | `deduplicate.go:20` | Find and merge duplicate messages by Message-ID (and optionally content hash). Flags: `--account`, `--collection`, `--dry-run`, `--content-hash`, `--undo <batch-id>` (repeatable), `--delete-dups-from-source-server`. Reversible. | `internal/dedup`, `internal/store` |
-| `delete-deduped` | `delete_deduped.go:11` | Permanently hard-delete dedup-hidden rows. Flags: `--batch` (repeatable), `--all-hidden`, `--no-backup`, `--yes`. Local-only; not reversible. | `internal/store` |
-| `list-deletions` | `deletions.go:22` | List deletion batches across all statuses. | `internal/deletion` |
-| `show-deletion <batch-id>` | `deletions.go:93` | Show a single deletion manifest. | `internal/deletion` |
-| `cancel-deletion [batch-id]` | `deletions.go:118` | Cancel pending/in-progress batches. Flag: `--all`. | `internal/deletion` |
-| `delete-staged [batch-id]` | `deletions.go:236` | Execute staged deletions against Gmail. Flags: `--permanent`, `--yes`, `--dry-run`, `--list`, `--account`. Gated by `MSGVAULT_ENABLE_REMOTE_DELETE=1` for the v1 release; `--list` and `--dry-run` work without the gate. `--permanent` and `--yes` are mutually exclusive. | `internal/deletion`, `internal/gmail` |
+| `deduplicate` (alias `dedup`, `dedupe`) | `deduplicate.go` | Find and merge duplicate messages by Message-ID (and optionally content hash). Flags: `--account`, `--collection`, `--dry-run`, `--content-hash`, `--undo <batch-id>` (repeatable). Soft-deletes locally; reversible via `--undo`. Never proposes remote deletion. | `internal/dedup`, `internal/store` |
+| `prune-local` | `prune_local.go` | Permanently remove dedup-hidden rows from the local archive. Flags: `--batch` (repeatable), `--all-hidden`, `--no-backup`, `--yes`. Local-only; does not touch any remote mailbox. Not reversible. | `internal/store` |
 
 ### Service / integration
 
@@ -207,7 +207,7 @@ The `add`, `remove`, and `create` subcommands all take
   and runs `runStartupMigrations` (legacy `[identity]` migration).
   Most commands that mutate local data call this.
 - `MustBeLocal(name)` — gate inside `RunE` for commands that have no
-  remote-server equivalent (`import-*`, `delete-deduped`,
+  remote-server equivalent (`import-*`, `prune-local`,
   `create-subset`, `import` deprecated alias).
 
 The `MessageStore` interface is intentionally narrow:
@@ -257,8 +257,7 @@ Dedupe, search, identity-list, and the deletion staging path all use
 - Maintenance: `repair_encoding_test.go`, `verify_test.go`,
   `export_attachments_test.go`, `export_attachment_test.go`,
   `export_token_test.go`.
-- Deletion path: `deletions_test.go`, `deduplicate_test.go`,
-  `delete_deduped_test.go`.
+- Local pruning / dedup: `deduplicate_test.go`, `prune_local_test.go`.
 - Service: `serve_test.go`, `mcp_test.go`.
 - Sync: `sync_test.go`.
 - Setup: `setup_test.go`, `root_test.go`, `confirm_test.go`,
@@ -277,9 +276,9 @@ explicitly. Where a command is constructed by a factory
   for one release cycle as an alias for `import-whatsapp`.
 - `update_account_test.go` does not exist; `update-account`'s only
   current capability is `--display-name`, so coverage is thin.
-- The README command table at `README.md:79-100` lists only ~20 of
-  the 49 top-level commands. Many useful surfaces — `query`, `mcp`,
-  `deduplicate`, `delete-staged`, `list-deletions`, `cache-stats`,
+- The README command table at `README.md` lists only ~20 of the
+  top-level commands. Many useful surfaces — `query`, `mcp`,
+  `deduplicate`, `prune-local`, `cache-stats`,
   `add-imap`, `add-o365`, `import-pst`, `import-messenger`,
   `import-imessage`, `import-gvoice`, `import-whatsapp`,
   `build-embeddings`, `create-subset`, `export-eml`, `export-token`,

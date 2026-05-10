@@ -9,13 +9,44 @@ If you discover a security vulnerability in msgvault, please report it responsib
 3. Include steps to reproduce, impact assessment, and any suggested fixes
 4. Allow reasonable time for a fix before public disclosure
 
+## What this fork cannot do
+
+This fork of msgvault is the *read-only edition*. The product premise
+is that the binary is structurally incapable of mutating any remote
+mailbox. The non-capabilities below are enforced in code, not by
+convention:
+
+| Cannot | How that is enforced |
+|---|---|
+| Trash a Gmail message | The `MessageDeleter` interface and `TrashMessage` method are deleted. The compiler rejects any call site. |
+| Permanently delete a Gmail message | `DeleteMessage` and `BatchDeleteMessages` are deleted. The `OpMessagesDelete` / `OpMessagesBatchDelete` rate-limit constants are deleted. |
+| Modify Gmail labels, send mail, create drafts | The Gmail client never had these methods. There are no call sites in the binary. |
+| Move, delete, or `\Deleted`-flag IMAP messages | The IMAP client's `TrashMessage` and `DeleteMessage` (`UID MOVE`, `UID STORE \Deleted`, `UID EXPUNGE`) are deleted. |
+| Mark IMAP messages as read on fetch | The IMAP client uses `BODY.PEEK[]` exclusively. A regression test (`internal/imap/no_body_fetch_test.go`) source-greps for `BODY[` and fails the build if reintroduced. |
+| Request anything beyond `gmail.readonly` | `internal/oauth/oauth.go` declares one scope. A regression test (`internal/oauth/scopes_test.go`) asserts the scope list is exactly `[gmail.readonly]`. |
+| Stage messages for later deletion (CLI/TUI/MCP) | The `internal/deletion/` subsystem is deleted. The CLI commands (`delete-staged`, `list-deletions`, `show-deletion`, `cancel-deletion`) are deleted. The TUI's `d`/`D` keys show a banner explaining the build is read-only. The MCP `stage_deletion` tool is unregistered. |
+
+The only remote call this fork makes that has *any* server-side effect
+is `microsoft.Manager.RevokeOwnToken` (renamed from `DeleteToken`),
+which revokes the user's own OAuth refresh token at Microsoft when
+they run `msgvault remove-account`. It never touches mailbox content.
+
+If you previously granted msgvault write scopes from the upstream
+edition, your existing token still works for read calls but carries
+more permission than this fork uses. To downgrade to least privilege:
+revoke the grant at https://myaccount.google.com/permissions, then
+re-run `msgvault add-account <email>`. The new grant will request only
+`gmail.readonly`.
+
+For the full design rationale see `plans/readonly-conversion.md`.
+
 ## Threat Model
 
 ### What msgvault protects
 
 | Asset | Storage | Risk if compromised |
 |-------|---------|-------------------|
-| OAuth2 tokens | `~/.msgvault/tokens/` (per-account files) | Full Gmail API access to victim's account |
+| OAuth2 tokens | `~/.msgvault/tokens/` (per-account files) | Read-only Gmail API access to victim's account (no write capability — see "What this fork cannot do" above) |
 | Email bodies | SQLite database (`~/.msgvault/msgvault.db`) | Exposure of 20+ years of personal email |
 | Attachments | Content-addressed files (`~/.msgvault/attachments/`) | Exposure of personal documents |
 | Contact metadata | SQLite (participants table) | Social graph exposure |

@@ -49,10 +49,7 @@ Scope:
                         across two accounts in the collection will hide
                         the loser locally. Use --dry-run first to
                         review what would be merged. Cross-source pruning
-                        is local-only and reversible with --undo;
-                        --delete-dups-from-source-server only stages
-                        remote deletion when the loser and the survivor
-                        share a source (same-source-only).
+                        is local-only and reversible with --undo.
   (no flag)             Dedup runs per-account independently for every
                         account. Source boundaries are never crossed.
 
@@ -62,20 +59,23 @@ Message-ID matching is insufficient.
 Use --undo <batch-id> to reverse a previous dedup run. Pass --undo
 multiple times to reverse several batches in one invocation; failures
 on one batch do not skip later batches, and any errors are aggregated
-and reported at the end.`,
+and reported at the end.
+
+Note: this is the read-only edition of msgvault. deduplicate only
+hides duplicates locally — it never proposes deletion from the
+remote server.`,
 	RunE: runDeduplicate,
 }
 
 var (
-	dedupDryRun               bool
-	dedupNoBackup             bool
-	dedupPrefer               string
-	dedupContentHash          bool
-	dedupUndo                 []string
-	dedupAccount              string
-	dedupCollection           string
-	dedupDeleteFromSourceSrvr bool
-	dedupYes                  bool
+	dedupDryRun      bool
+	dedupNoBackup    bool
+	dedupPrefer      string
+	dedupContentHash bool
+	dedupUndo        []string
+	dedupAccount     string
+	dedupCollection  string
+	dedupYes         bool
 )
 
 func runDeduplicate(cmd *cobra.Command, _ []string) error {
@@ -93,37 +93,26 @@ func runDeduplicate(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("resolve database path: %w", err)
 	}
 
-	deletionsDir := filepath.Join(cfg.Data.DataDir, "deletions")
-
 	// --undo operates on a recorded batch ID; scope is captured in the
 	// batch itself. Cobra rejects --undo combined with --account or
 	// --collection, so by the time we reach this branch undo can run
 	// without resolving scope flags (a stale or renamed account would
 	// otherwise block a valid undo).
 	if len(dedupUndo) > 0 {
-		undoConfig := dedup.Config{DeletionsDir: deletionsDir}
-		engine := dedup.NewEngine(st, undoConfig, logger)
-		var allStillRunning []string
+		engine := dedup.NewEngine(st, dedup.Config{}, logger)
 		var undoErrs []error
 		for _, batchID := range dedupUndo {
-			restored, stillRunning, err := engine.Undo(batchID)
-			// Undo is best-effort: database rows may have been restored
-			// even if cancelling pending manifests failed. Always report
-			// the restored count and any still-running manifests before
-			// continuing so the user isn't left thinking the undo did
-			// nothing. Errors aggregate across batches so a failure on
-			// one batch ID doesn't skip the rest.
+			restored, err := engine.Undo(batchID)
+			// Always report the restored count before continuing so the
+			// user isn't left thinking the undo did nothing. Errors
+			// aggregate across batches so a failure on one batch ID
+			// doesn't skip the rest.
 			fmt.Printf("Restored %d messages from batch %q.\n",
 				restored, batchID)
-			allStillRunning = append(allStillRunning, stillRunning...)
 			if err != nil {
-				fmt.Fprintf(os.Stderr,
-					"\nError cancelling one or more pending manifests "+
-						"for batch %q:\n  %v\n", batchID, err)
 				undoErrs = append(undoErrs, fmt.Errorf("undo dedup %q: %w", batchID, err))
 			}
 		}
-		printStillRunningWarning(allStillRunning)
 		return errors.Join(undoErrs...)
 	}
 
@@ -172,14 +161,12 @@ func runDeduplicate(cmd *cobra.Command, _ []string) error {
 	}
 
 	config := dedup.Config{
-		SourcePreference:           preference,
-		ContentHashFallback:        dedupContentHash,
-		DryRun:                     dedupDryRun,
-		AccountSourceIDs:           accountSourceIDs,
-		Account:                    canonicalAccount,
-		ScopeIsCollection:          scopeIsCollection,
-		DeleteDupsFromSourceServer: dedupDeleteFromSourceSrvr,
-		DeletionsDir:               deletionsDir,
+		SourcePreference:    preference,
+		ContentHashFallback: dedupContentHash,
+		DryRun:              dedupDryRun,
+		AccountSourceIDs:    accountSourceIDs,
+		Account:             canonicalAccount,
+		ScopeIsCollection:   scopeIsCollection,
 	}
 
 	if len(accountSourceIDs) > 0 {
@@ -495,18 +482,6 @@ func printDedupSummary(summary *dedup.ExecutionSummary) {
 	fmt.Printf("Labels transferred:  %d\n", summary.LabelsTransferred)
 	fmt.Printf("Raw MIME backfilled: %d\n", summary.RawMIMEBackfilled)
 
-	if len(summary.StagedManifests) > 0 {
-		fmt.Println("\nStaged deletion manifests (pending):")
-		for _, m := range summary.StagedManifests {
-			fmt.Printf("  %s  [%s]  %d messages  (%s)\n",
-				m.ManifestID, m.SourceType, m.MessageCount, m.Account)
-		}
-		fmt.Println(
-			"\nRun 'msgvault delete-staged --list' to inspect, or " +
-				"MSGVAULT_ENABLE_REMOTE_DELETE=1 msgvault delete-staged " +
-				"to remove the duplicates from the remote server.",
-		)
-	}
 	fmt.Printf("\nTo undo: msgvault deduplicate --undo %s\n",
 		summary.BatchID)
 }
@@ -573,26 +548,6 @@ func loadPerSourceIdentities(st *store.Store, sourceIDs []int64) (map[int64]map[
 	return out, nil
 }
 
-func printStillRunningWarning(ids []string) {
-	if len(ids) == 0 {
-		return
-	}
-	// "Currently executing" specifically — these manifests have already
-	// been promoted from pending to in-progress, so they can't be
-	// cancelled (the executor will run them to completion). This is a
-	// different class of message from a pending-cancel *failure*
-	// (which surfaces as a returned error from Undo, not via this
-	// warning).
-	fmt.Printf(
-		"\nWarning: the following deletion manifests are currently " +
-			"executing\nand cannot be cancelled (the executor will run " +
-			"them to completion):\n",
-	)
-	for _, id := range ids {
-		fmt.Printf("  - %s\n", id)
-	}
-}
-
 func init() {
 	rootCmd.AddCommand(deduplicateCmd)
 	deduplicateCmd.Flags().BoolVar(&dedupDryRun, "dry-run", false,
@@ -623,19 +578,10 @@ func init() {
 	// would force a stale-account lookup before reaching the undo path.
 	deduplicateCmd.MarkFlagsMutuallyExclusive("undo", "account")
 	deduplicateCmd.MarkFlagsMutuallyExclusive("undo", "collection")
-	deduplicateCmd.Flags().BoolVar(&dedupDeleteFromSourceSrvr,
-		"delete-dups-from-source-server", false,
-		"DESTRUCTIVE: stage pruned duplicates for remote deletion "+
-			"(execution requires MSGVAULT_ENABLE_REMOTE_DELETE=1)")
 	deduplicateCmd.Flags().BoolVarP(&dedupYes, "yes", "y", false,
 		"Skip confirmation prompt")
 	// --undo restores rows from a recorded batch; none of the
-	// scan/merge/stage flags below apply. Reject the combinations
-	// explicitly so a user invoking
-	// `msgvault deduplicate --undo X --delete-dups-from-source-server`
-	// gets an error instead of having the destructive flag silently
-	// ignored.
-	deduplicateCmd.MarkFlagsMutuallyExclusive("undo", "delete-dups-from-source-server")
+	// scan/merge flags below apply. Reject the combinations explicitly.
 	deduplicateCmd.MarkFlagsMutuallyExclusive("undo", "prefer")
 	deduplicateCmd.MarkFlagsMutuallyExclusive("undo", "content-hash")
 	deduplicateCmd.MarkFlagsMutuallyExclusive("undo", "no-backup")
