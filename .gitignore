@@ -17,6 +17,7 @@
 .env.*
 client_secret*.json
 oauth_client*.json
+scripts/rsync-nas/*-credentials-*/
 
 # OS files
 .DS_Store
