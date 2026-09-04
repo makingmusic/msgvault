@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+The repository-wide contract is in `AGENTS.md`. This file provides additional
+Claude-oriented context. Where guidance overlaps, the shared safety, privacy,
+validation, and Git rules in `AGENTS.md` apply.
+
 ## General Workflow
 
 When a task involves multiple steps (e.g., implement + commit + PR), complete ALL steps in sequence without stopping. If creating a branch, committing, and opening a PR, finish the entire chain.
@@ -203,11 +207,15 @@ Never use real people's names, email addresses, or identifiers in test fixtures.
 
 ## Go Development
 
-After making any Go code changes, always run `go fmt ./...` and `go vet ./...` before committing. Stage ALL resulting changes, including formatting-only files.
+After making any Go code changes, always run `go fmt ./...` and `go vet ./...`
+before committing. Stage formatting changes only when they were caused by and
+are required for the intended logical change; preserve unrelated work.
 
 ## Git Workflow
 
-When committing changes, always stage ALL modified files (including formatting, generated files, and ancillary changes). Run `git diff` and `git status` before committing to ensure nothing is left unstaged.
+When committing changes, stage only the files that belong to the intended
+logical change. Run `git diff`, `git diff --cached`, and `git status` before
+committing. Leave unrelated or concurrent modifications untouched.
 
 ## Code Style & Linting
 
