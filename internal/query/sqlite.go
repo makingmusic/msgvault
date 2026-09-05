@@ -850,7 +850,7 @@ func (e *SQLiteEngine) GetMessageRaw(ctx context.Context, id int64) ([]byte, err
 // ListAccounts returns all source accounts.
 func (e *SQLiteEngine) ListAccounts(ctx context.Context) ([]AccountInfo, error) {
 	rows, err := e.db.QueryContext(ctx, `
-		SELECT id, source_type, identifier, COALESCE(display_name, '')
+		SELECT id, source_type, identifier, COALESCE(display_name, ''), last_sync_at
 		FROM sources
 		ORDER BY identifier
 	`)
@@ -862,8 +862,12 @@ func (e *SQLiteEngine) ListAccounts(ctx context.Context) ([]AccountInfo, error) 
 	var accounts []AccountInfo
 	for rows.Next() {
 		var acc AccountInfo
-		if err := rows.Scan(&acc.ID, &acc.SourceType, &acc.Identifier, &acc.DisplayName); err != nil {
+		var lastSyncAt sql.NullTime
+		if err := rows.Scan(&acc.ID, &acc.SourceType, &acc.Identifier, &acc.DisplayName, &lastSyncAt); err != nil {
 			return nil, fmt.Errorf("scan account: %w", err)
+		}
+		if lastSyncAt.Valid {
+			acc.LastSyncAt = &lastSyncAt.Time
 		}
 		accounts = append(accounts, acc)
 	}

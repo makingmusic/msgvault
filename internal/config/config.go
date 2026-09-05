@@ -76,6 +76,37 @@ type IdentityConfig struct {
 	Addresses []string `toml:"addresses"`
 }
 
+// BackupConfig locates the external backup script's success marker so
+// get_stats's MCP tool can report backup freshness alongside archive
+// stats. This is host-ops metadata about scripts/backup-*.sh, not part
+// of msgvault's own data model — see internal/mcp's BackupStatus.
+type BackupConfig struct {
+	// StateDir is the directory containing the "last_success" marker
+	// file scripts/backup-rsync.sh touches on every successful run.
+	// ApplyDefaults fills this to ~/.local/state/msgvault-backup (the
+	// scripts' own default) when left empty in config.toml, so the
+	// get_stats backup check is on by default and stays in sync with
+	// the shell scripts without needing explicit configuration.
+	StateDir string `toml:"state_dir"`
+	// MaxAgeHours is the staleness threshold. Matches
+	// scripts/backup-watchdog.sh's own MAX_AGE_HOURS=36 default; keep
+	// the two in sync if either changes.
+	MaxAgeHours int `toml:"max_age_hours"`
+}
+
+// ApplyDefaults fills in sensible defaults for any zero-valued fields.
+// Called after TOML decode, before use — mirrors vector.Config.ApplyDefaults.
+func (b *BackupConfig) ApplyDefaults() {
+	if b.StateDir == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			b.StateDir = filepath.Join(home, ".local", "state", "msgvault-backup")
+		}
+	}
+	if b.MaxAgeHours == 0 {
+		b.MaxAgeHours = 36
+	}
+}
+
 type Config struct {
 	Data      DataConfig        `toml:"data"`
 	Log       LogConfig         `toml:"log"`
@@ -87,6 +118,7 @@ type Config struct {
 	Remote    RemoteConfig      `toml:"remote"`
 	Vector    vector.Config     `toml:"vector"`
 	Identity  IdentityConfig    `toml:"identity"`
+	Backup    BackupConfig      `toml:"backup"`
 	Accounts  []AccountSchedule `toml:"accounts"`
 
 	// Computed paths (not from config file)
@@ -252,6 +284,7 @@ func NewDefaultConfig() *Config {
 		Accounts: []AccountSchedule{},
 	}
 	cfg.Vector.ApplyDefaults()
+	cfg.Backup.ApplyDefaults()
 	return cfg
 }
 
@@ -316,6 +349,7 @@ func Load(path, homeDir string) (*Config, error) {
 	cfg.OAuth.ClientSecrets = expandPath(cfg.OAuth.ClientSecrets)
 	cfg.OAuth.ServiceAccountKey = expandPath(cfg.OAuth.ServiceAccountKey)
 	cfg.Vector.DBPath = expandPath(cfg.Vector.DBPath)
+	cfg.Backup.StateDir = expandPath(cfg.Backup.StateDir)
 	for name, app := range cfg.OAuth.Apps {
 		app.ClientSecrets = expandPath(app.ClientSecrets)
 		app.ServiceAccountKey = expandPath(app.ServiceAccountKey)
@@ -330,6 +364,7 @@ func Load(path, homeDir string) (*Config, error) {
 		cfg.OAuth.ClientSecrets = resolveRelative(cfg.OAuth.ClientSecrets, cfg.HomeDir)
 		cfg.OAuth.ServiceAccountKey = resolveRelative(cfg.OAuth.ServiceAccountKey, cfg.HomeDir)
 		cfg.Vector.DBPath = resolveRelative(cfg.Vector.DBPath, cfg.HomeDir)
+		cfg.Backup.StateDir = resolveRelative(cfg.Backup.StateDir, cfg.HomeDir)
 		for name, app := range cfg.OAuth.Apps {
 			app.ClientSecrets = resolveRelative(app.ClientSecrets, cfg.HomeDir)
 			app.ServiceAccountKey = resolveRelative(app.ServiceAccountKey, cfg.HomeDir)
@@ -342,6 +377,7 @@ func Load(path, homeDir string) (*Config, error) {
 	// Preprocess booleans are *bool so pointer-nil still means "default";
 	// an explicit false in the file stays false.
 	cfg.Vector.ApplyDefaults()
+	cfg.Backup.ApplyDefaults()
 
 	return cfg, nil
 }

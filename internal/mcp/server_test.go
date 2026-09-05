@@ -38,6 +38,7 @@ type statsResponse struct {
 	Stats        query.TotalStats    `json:"stats"`
 	Accounts     []query.AccountInfo `json:"accounts"`
 	VectorSearch *vector.StatsView   `json:"vector_search"`
+	Backup       *BackupStatus       `json:"backup"`
 }
 
 type attachmentMeta struct {
@@ -415,6 +416,104 @@ func TestGetStats_VectorDisabled(t *testing.T) {
 	}
 	if _, ok := raw["vector_search"]; ok {
 		t.Errorf("expected 'vector_search' to be absent from JSON when backend is nil")
+	}
+}
+
+func TestGetStats_BackupStatus_NoStateDir(t *testing.T) {
+	eng := &querytest.MockEngine{
+		Stats:    &query.TotalStats{MessageCount: 1},
+		Accounts: []query.AccountInfo{{ID: 1, Identifier: "alice@gmail.com"}},
+	}
+	// newTestHandlers leaves backupStateDir empty, mirroring a server not
+	// configured with [backup] state_dir.
+	h := newTestHandlers(eng)
+
+	resp := runTool[statsResponse](t, "get_stats", h.getStats, map[string]any{})
+
+	if resp.Backup != nil {
+		t.Fatalf("expected Backup to be nil when backupStateDir is empty, got %+v", resp.Backup)
+	}
+}
+
+func TestGetStats_BackupStatus_MissingMarker(t *testing.T) {
+	eng := &querytest.MockEngine{
+		Stats:    &query.TotalStats{MessageCount: 1},
+		Accounts: []query.AccountInfo{{ID: 1, Identifier: "alice@gmail.com"}},
+	}
+	h := &handlers{engine: eng, backupStateDir: t.TempDir(), backupMaxAgeHours: 36}
+
+	resp := runTool[statsResponse](t, "get_stats", h.getStats, map[string]any{})
+
+	if resp.Backup == nil {
+		t.Fatal("expected Backup to be populated when backupStateDir is set")
+	}
+	if !resp.Backup.Stale {
+		t.Error("expected Stale=true when the marker file does not exist")
+	}
+	if resp.Backup.Error == "" {
+		t.Error("expected Error to describe the missing marker file")
+	}
+	if resp.Backup.LastSuccessAt != nil {
+		t.Errorf("expected nil LastSuccessAt for a missing marker, got %v", resp.Backup.LastSuccessAt)
+	}
+}
+
+func TestGetStats_BackupStatus_FreshMarker(t *testing.T) {
+	eng := &querytest.MockEngine{
+		Stats:    &query.TotalStats{MessageCount: 1},
+		Accounts: []query.AccountInfo{{ID: 1, Identifier: "alice@gmail.com"}},
+	}
+	stateDir := t.TempDir()
+	markerPath := filepath.Join(stateDir, "last_success")
+	if err := os.WriteFile(markerPath, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+
+	h := &handlers{engine: eng, backupStateDir: stateDir, backupMaxAgeHours: 36}
+
+	resp := runTool[statsResponse](t, "get_stats", h.getStats, map[string]any{})
+
+	if resp.Backup == nil {
+		t.Fatal("expected Backup to be populated")
+	}
+	if resp.Backup.Stale {
+		t.Errorf("expected Stale=false for a marker written moments ago, got age_hours=%v", resp.Backup.AgeHours)
+	}
+	if resp.Backup.Error != "" {
+		t.Errorf("expected no Error for a fresh marker, got %q", resp.Backup.Error)
+	}
+	if resp.Backup.LastSuccessAt == nil {
+		t.Fatal("expected LastSuccessAt to be populated")
+	}
+}
+
+func TestGetStats_BackupStatus_StaleMarker(t *testing.T) {
+	eng := &querytest.MockEngine{
+		Stats:    &query.TotalStats{MessageCount: 1},
+		Accounts: []query.AccountInfo{{ID: 1, Identifier: "alice@gmail.com"}},
+	}
+	stateDir := t.TempDir()
+	markerPath := filepath.Join(stateDir, "last_success")
+	if err := os.WriteFile(markerPath, []byte("irrelevant — Stale is mtime-based, not content-based\n"), 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(markerPath, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	h := &handlers{engine: eng, backupStateDir: stateDir, backupMaxAgeHours: 36}
+
+	resp := runTool[statsResponse](t, "get_stats", h.getStats, map[string]any{})
+
+	if resp.Backup == nil {
+		t.Fatal("expected Backup to be populated")
+	}
+	if !resp.Backup.Stale {
+		t.Errorf("expected Stale=true for a 48h-old marker against a 36h threshold, got age_hours=%v", resp.Backup.AgeHours)
+	}
+	if resp.Backup.Error != "" {
+		t.Errorf("expected no Error for a readable-but-stale marker, got %q", resp.Backup.Error)
 	}
 }
 

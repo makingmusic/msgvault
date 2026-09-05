@@ -111,9 +111,11 @@ Add to Claude Desktop config:
 		}()
 
 		opts := mcpserver.ServeOptions{
-			Engine:         engine,
-			AttachmentsDir: cfg.AttachmentsDir(),
-			DataDir:        cfg.Data.DataDir,
+			Engine:            engine,
+			AttachmentsDir:    cfg.AttachmentsDir(),
+			DataDir:           cfg.Data.DataDir,
+			BackupStateDir:    cfg.Backup.StateDir,
+			BackupMaxAgeHours: cfg.Backup.MaxAgeHours,
 		}
 		if vf != nil {
 			opts.HybridEngine = vf.HybridEngine

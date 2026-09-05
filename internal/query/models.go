@@ -333,6 +333,11 @@ type AccountInfo struct {
 	SourceType  string
 	Identifier  string // email address
 	DisplayName string
+	// LastSyncAt is nil if the account has never completed a sync.
+	// Populated by SQLiteEngine and DuckDBEngine (both its sqlite_scan
+	// and delegated-to-SQLiteEngine paths); PostgreSQLEngine leaves it
+	// nil (scaffold only).
+	LastSyncAt *time.Time
 }
 
 // StatsOptions configures a stats query.

@@ -1481,6 +1481,50 @@ strip_signatures = false
 	}
 }
 
+func TestNewDefaultConfig_BackupDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	cfg := NewDefaultConfig()
+
+	wantStateDir := filepath.Join(tmpDir, ".local", "state", "msgvault-backup")
+	if cfg.Backup.StateDir != wantStateDir {
+		t.Errorf("Backup.StateDir = %q, want %q", cfg.Backup.StateDir, wantStateDir)
+	}
+	if cfg.Backup.MaxAgeHours != 36 {
+		t.Errorf("Backup.MaxAgeHours = %d, want 36", cfg.Backup.MaxAgeHours)
+	}
+}
+
+func TestLoadReappliesBackupDefaults(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+
+	configContent := `
+[backup]
+state_dir = "/mnt/nas/msgvault-backup"
+max_age_hours = 0
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(configPath, "")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Explicit state_dir survives untouched.
+	if cfg.Backup.StateDir != "/mnt/nas/msgvault-backup" {
+		t.Errorf("Backup.StateDir = %q, want explicit value preserved", cfg.Backup.StateDir)
+	}
+	// Explicit max_age_hours = 0 is indistinguishable from omitted in TOML;
+	// ApplyDefaults re-lifts it to 36, same as the vector-config precedent.
+	if cfg.Backup.MaxAgeHours != 36 {
+		t.Errorf("Backup.MaxAgeHours = %d, want 36 (re-defaulted from explicit 0)", cfg.Backup.MaxAgeHours)
+	}
+}
+
 func TestLoadWithNamedOAuthApps_RelativePaths(t *testing.T) {
 	tmpDir := t.TempDir()
 

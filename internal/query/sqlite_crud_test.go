@@ -3,6 +3,7 @@ package query
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/wesm/msgvault/internal/search"
 	"github.com/wesm/msgvault/internal/testutil/dbtest"
@@ -323,6 +324,32 @@ func TestListAccounts(t *testing.T) {
 	}
 	if accounts[0].Identifier != "test@gmail.com" {
 		t.Errorf("expected test@gmail.com, got %s", accounts[0].Identifier)
+	}
+	if accounts[0].LastSyncAt != nil {
+		t.Errorf("expected nil LastSyncAt for a never-synced seed account, got %v", accounts[0].LastSyncAt)
+	}
+}
+
+func TestListAccounts_LastSyncAt(t *testing.T) {
+	env := newTestEnv(t)
+
+	want := time.Date(2026, 8, 20, 8, 42, 0, 0, time.UTC)
+	if _, err := env.DB.ExecContext(env.Ctx, `UPDATE sources SET last_sync_at = ? WHERE identifier = ?`, want, "test@gmail.com"); err != nil {
+		t.Fatalf("update last_sync_at: %v", err)
+	}
+
+	accounts, err := env.Engine.ListAccounts(env.Ctx)
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	if len(accounts) != 1 {
+		t.Fatalf("expected 1 account, got %d", len(accounts))
+	}
+	if accounts[0].LastSyncAt == nil {
+		t.Fatal("expected LastSyncAt to be populated")
+	}
+	if !accounts[0].LastSyncAt.Equal(want) {
+		t.Errorf("LastSyncAt = %v, want %v", accounts[0].LastSyncAt, want)
 	}
 }
 

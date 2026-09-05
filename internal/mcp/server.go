@@ -86,6 +86,15 @@ type ServeOptions struct {
 	// Backend is optional. When nil, find_similar_messages rejects all
 	// calls with a vector_not_enabled error.
 	Backend vector.Backend
+
+	// BackupStateDir enables the "backup" section of get_stats's
+	// response — the directory containing the backup script's
+	// "last_success" marker file (see scripts/backup-watchdog.sh).
+	// Empty disables the check; get_stats omits "backup" entirely.
+	BackupStateDir string
+	// BackupMaxAgeHours is the staleness threshold for BackupStateDir's
+	// marker file. Ignored when BackupStateDir is empty.
+	BackupMaxAgeHours int
 }
 
 // newMCPServer builds an MCP server with all tools registered from opts.
@@ -98,12 +107,14 @@ func newMCPServer(opts ServeOptions) *server.MCPServer {
 	)
 
 	h := &handlers{
-		engine:         opts.Engine,
-		attachmentsDir: opts.AttachmentsDir,
-		dataDir:        opts.DataDir,
-		hybridEngine:   opts.HybridEngine,
-		vectorCfg:      opts.VectorCfg,
-		backend:        opts.Backend,
+		engine:            opts.Engine,
+		attachmentsDir:    opts.AttachmentsDir,
+		dataDir:           opts.DataDir,
+		hybridEngine:      opts.HybridEngine,
+		vectorCfg:         opts.VectorCfg,
+		backend:           opts.Backend,
+		backupStateDir:    opts.BackupStateDir,
+		backupMaxAgeHours: opts.BackupMaxAgeHours,
 	}
 
 	vectorAvailable := opts.HybridEngine != nil

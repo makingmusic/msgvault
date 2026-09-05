@@ -37,6 +37,12 @@ type handlers struct {
 	hybridEngine *hybrid.Engine
 	vectorCfg    vector.Config
 	backend      vector.Backend
+
+	// backupStateDir/backupMaxAgeHours feed get_stats's best-effort
+	// backup-freshness check. Empty backupStateDir disables the check
+	// (collectBackupStatus returns nil).
+	backupStateDir    string
+	backupMaxAgeHours int
 }
 
 // translateVectorErr maps well-known vector sentinel errors to MCP tool
@@ -734,12 +740,49 @@ func (h *handlers) listMessages(ctx context.Context, req mcp.CallToolRequest) (*
 }
 
 // getStatsResponse is the JSON body returned by the get_stats MCP tool.
-// VectorSearch is omitempty so archives without vector search do not
-// surface an empty sub-object to callers.
+// VectorSearch and Backup are omitempty so archives without vector search,
+// or servers not configured with a backup state dir, do not surface an
+// empty sub-object to callers.
 type getStatsResponse struct {
 	Stats        *query.TotalStats   `json:"stats"`
 	Accounts     []query.AccountInfo `json:"accounts"`
 	VectorSearch *vector.StatsView   `json:"vector_search,omitempty"`
+	Backup       *BackupStatus       `json:"backup,omitempty"`
+}
+
+// BackupStatus reports the freshness of the host's nightly backup job, read
+// from the plain marker file the backup script touches on every successful
+// run (see scripts/backup-rsync.sh / scripts/backup-watchdog.sh). This is
+// host-ops metadata, not part of msgvault's own data model — it exists here
+// purely so remote MCP clients can check backup health alongside archive
+// stats without a separate access path.
+type BackupStatus struct {
+	LastSuccessAt *time.Time `json:"last_success_at,omitempty"`
+	AgeHours      float64    `json:"age_hours,omitempty"`
+	Stale         bool       `json:"stale"`
+	Error         string     `json:"error,omitempty"`
+}
+
+// collectBackupStatus stats the backup success marker file's mtime — not
+// its contents — mirroring scripts/backup-watchdog.sh's own staleness
+// check (`date -r "$SUCCESS_MARKER" +%s`). Best-effort: a missing or
+// unreadable marker is reported as stale via BackupStatus.Error, never as
+// a Go error, matching the vector.CollectStats side-channel pattern below.
+func collectBackupStatus(stateDir string, maxAgeHours int) *BackupStatus {
+	if stateDir == "" {
+		return nil
+	}
+	info, err := os.Stat(filepath.Join(stateDir, "last_success"))
+	if err != nil {
+		return &BackupStatus{Stale: true, Error: err.Error()}
+	}
+	modTime := info.ModTime()
+	age := time.Since(modTime)
+	return &BackupStatus{
+		LastSuccessAt: &modTime,
+		AgeHours:      age.Hours(),
+		Stale:         age.Hours() > float64(maxAgeHours),
+	}
 }
 
 func (h *handlers) getStats(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -760,10 +803,16 @@ func (h *handlers) getStats(ctx context.Context, _ mcp.CallToolRequest) (*mcp.Ca
 		fmt.Fprintf(os.Stderr, "mcp: vector stats failed: %v\n", vsErr)
 	}
 
+	backup := collectBackupStatus(h.backupStateDir, h.backupMaxAgeHours)
+	if backup != nil && backup.Error != "" {
+		fmt.Fprintf(os.Stderr, "mcp: backup status check failed: %v\n", backup.Error)
+	}
+
 	return jsonResult(getStatsResponse{
 		Stats:        stats,
 		Accounts:     accounts,
 		VectorSearch: vs,
+		Backup:       backup,
 	})
 }
 
