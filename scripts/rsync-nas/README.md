@@ -1,5 +1,8 @@
 # MsgVault NAS backup
 
+See [`docs/nas-backup.md`](../../docs/nas-backup.md) for the complete schedule,
+runtime flow, monitoring, failure semantics, and recovery runbook.
+
 This directory contains the tracked operational source for the MsgVault NAS
 backup. The deployed path `/home/jarvis/msgvault/scripts/backup-rsync.sh` is a
 symlink to `backup-rsync.sh` here, eliminating an untracked copy that could

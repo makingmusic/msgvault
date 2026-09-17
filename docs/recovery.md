@@ -85,3 +85,10 @@ If the database has any activity, also copy the `-wal` and `-shm` sidecar
 files at the same instant (or run `msgvault` once to checkpoint the WAL
 into the main file before copying). A bare `.db` copy without its sidecars
 can itself be a source of corruption.
+
+## Nightly NAS recovery copy
+
+The `makingmusic/msgvault` deployment maintains a separate nightly NAS mirror
+of the complete archive. Its scheduling, SQLite consistency checks, restricted
+rsync-over-SSH account, success marker, watchdog, and restore diagnostics are
+documented in [Nightly sync and NAS backup operations](nas-backup.md).

@@ -228,6 +228,7 @@ The TUI can connect to a remote server by configuring `[remote].url`. Use `--loc
 - [MCP Server](https://msgvault.io/usage/chat/): AI assistant integration
 - [Troubleshooting](https://msgvault.io/troubleshooting/): common issues and fixes
 - [Development](https://msgvault.io/development/): contributing, testing, building
+- [NAS backup operations](docs/nas-backup.md): host-specific nightly sync, backup, and monitoring runbook
 
 ## Community
 
