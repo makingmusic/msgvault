@@ -3,8 +3,8 @@ set -Eeuo pipefail
 
 MSGVAULT_HOME="${MSGVAULT_HOME:-/home/jarvis/msgvault}"
 MSGVAULT_BIN="${MSGVAULT_BIN:-/home/jarvis/.local/bin/msgvault-ro}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/lib.sh"
+RUNTIME_SCRIPT_DIR="${MSGVAULT_RUNTIME_SCRIPT_DIR:-$MSGVAULT_HOME/scripts}"
+source "$RUNTIME_SCRIPT_DIR/lib.sh"
 
 LOCK_FILE="${LOCK_FILE:-$MSGVAULT_HOME/scripts/msgvault-maintenance.lock}"
 STATE_DIR="${STATE_DIR:-$HOME/.local/state/msgvault-backup}"

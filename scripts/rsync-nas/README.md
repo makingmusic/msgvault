@@ -1,8 +1,9 @@
 # MsgVault NAS backup
 
 This directory contains the tracked operational source for the MsgVault NAS
-backup. The deployed script is `/home/jarvis/msgvault/scripts/backup-rsync.sh`;
-keep it identical to `backup-rsync.sh` here.
+backup. The deployed path `/home/jarvis/msgvault/scripts/backup-rsync.sh` is a
+symlink to `backup-rsync.sh` here, eliminating an untracked copy that could
+drift from the reviewed version.
 
 The dated `*-credentials-*` directory is local-only and ignored by Git. It
 contains the password file and pinned host keys. Never force-add that directory
@@ -46,11 +47,12 @@ DNS response cannot silently redirect the backup to a different SSH server.
 
 ## Deployment
 
-After reviewing and testing a change, deploy the tracked script beside the
-existing `lib.sh`:
+Deploy the tracked script with a symlink. The script loads the shared runtime
+`lib.sh` from `/home/jarvis/msgvault/scripts` rather than relying on its own
+source directory:
 
 ```sh
-install -m 0755 scripts/rsync-nas/backup-rsync.sh \
+ln -sfn /home/jarvis/code/tooling/msgvault/scripts/rsync-nas/backup-rsync.sh \
   /home/jarvis/msgvault/scripts/backup-rsync.sh
 ```
 
