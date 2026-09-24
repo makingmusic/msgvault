@@ -204,9 +204,9 @@ duplicate row.
 
 Per-account, in-process. Each `gmail.Client` owns its own
 `*RateLimiter`. The CLI builds it from `cfg.Sync.RateLimitQPS` (default
-5). At the default the bucket is 250 capacity, 250 units/sec refill —
-the per-user Gmail quota. Operation costs match Gmail's documented
-units (`messages.get` = 5, `batchDelete` = 50, etc.).
+5). The setting is a literal HTTP request rate: at the default, the
+bucket has capacity 5 and refills at 5 requests/sec. Every operation
+costs one token.
 
 Adaptive backoff:
 

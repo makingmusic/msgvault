@@ -177,11 +177,11 @@ func TestOperationCost(t *testing.T) {
 		op   Operation
 		cost int
 	}{
-		{OpMessagesGet, 5},
-		{OpMessagesGetRaw, 5},
-		{OpMessagesList, 5},
+		{OpMessagesGet, 1},
+		{OpMessagesGetRaw, 1},
+		{OpMessagesList, 1},
 		{OpLabelsList, 1},
-		{OpHistoryList, 2},
+		{OpHistoryList, 1},
 		{OpProfile, 1},
 		{Operation(999), 1}, // Unknown operation defaults to 1
 	}
@@ -210,16 +210,39 @@ func TestNewRateLimiter(t *testing.T) {
 	}
 }
 
-func TestNewRateLimiter_ScaledQPS(t *testing.T) {
+func TestNewRateLimiter_LiteralQPS(t *testing.T) {
 	rl := NewRateLimiter(2.5)
-	expectedRate := DefaultRefillRate * 0.5
+	expectedRate := 2.5
 	if rl.refillRate != expectedRate {
 		t.Errorf("refillRate at 2.5 QPS = %v, want %v", rl.refillRate, expectedRate)
 	}
+	if rl.capacity != 2.5 {
+		t.Errorf("capacity at 2.5 QPS = %v, want 2.5", rl.capacity)
+	}
 
 	rl = NewRateLimiter(10.0)
-	if rl.refillRate != DefaultRefillRate {
-		t.Errorf("refillRate at 10 QPS = %v, want %v (capped)", rl.refillRate, DefaultRefillRate)
+	if rl.refillRate != 10.0 {
+		t.Errorf("refillRate at 10 QPS = %v, want 10", rl.refillRate)
+	}
+	if rl.capacity != 10.0 {
+		t.Errorf("capacity at 10 QPS = %v, want 10", rl.capacity)
+	}
+}
+
+func TestNewRateLimiter_OneRequestPerSecond(t *testing.T) {
+	clk := newMockClock()
+	rl := newRateLimiter(clk, 1.0)
+
+	if !rl.TryAcquire(OpMessagesGet) {
+		t.Fatal("first request should use the initial token")
+	}
+	if rl.TryAcquire(OpProfile) {
+		t.Fatal("second immediate request should be rate limited")
+	}
+
+	clk.Advance(time.Second)
+	if !rl.TryAcquire(OpProfile) {
+		t.Fatal("one request should be available after one second")
 	}
 }
 
@@ -311,7 +334,7 @@ func TestRateLimiter_Refill(t *testing.T) {
 
 	f.assertAvailable(t, 0)
 
-	// Advance clock by 1 second: should refill 250 tokens
+	// Advance clock by 1 second: should refill at the configured QPS.
 	f.clk.Advance(1 * time.Second)
 
 	f.assertAvailable(t, DefaultCapacity)
@@ -322,9 +345,9 @@ func TestRateLimiter_Available(t *testing.T) {
 
 	f.assertAvailable(t, DefaultCapacity)
 
-	f.rl.TryAcquire(OpMessagesGet) // cost 5
+	f.rl.TryAcquire(OpMessagesGet) // cost 1
 
-	f.assertAvailable(t, float64(DefaultCapacity-5))
+	f.assertAvailable(t, DefaultCapacity-1)
 }
 
 func TestRateLimiter_Concurrent(t *testing.T) {
@@ -460,8 +483,8 @@ func TestRateLimiter_Acquire_WaitsForThrottle(t *testing.T) {
 
 	done := f.acquireAsync(t, context.Background(), OpProfile)
 
-	// Advance past throttle — Acquire should complete
-	f.clk.Advance(150 * time.Millisecond)
+	// Advance past the throttle plus enough time to refill one request token.
+	f.clk.Advance(300 * time.Millisecond)
 
 	select {
 	case err := <-done:

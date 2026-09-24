@@ -12,38 +12,33 @@ type Clock interface {
 	After(d time.Duration) <-chan time.Time
 }
 
-// Operation represents a Gmail API operation with its quota cost.
+// Operation represents a Gmail API operation.
 type Operation int
 
 const (
-	OpMessagesGet    Operation = iota // 5 units
-	OpMessagesGetRaw                  // 5 units
-	OpMessagesList                    // 5 units
-	OpLabelsList                      // 1 unit
-	OpHistoryList                     // 2 units
-	OpProfile                         // 1 unit
+	OpMessagesGet Operation = iota
+	OpMessagesGetRaw
+	OpMessagesList
+	OpLabelsList
+	OpHistoryList
+	OpProfile
 )
 
-// Cost returns the quota cost for an operation.
+// Cost returns the request cost for an operation. The limiter intentionally
+// treats every HTTP request equally so rate_limit_qps is a literal request
+// rate rather than a provider-specific quota-unit conversion.
 func (o Operation) Cost() int {
-	switch o {
-	case OpMessagesGet, OpMessagesGetRaw, OpMessagesList:
-		return 5
-	case OpHistoryList:
-		return 2
-	default:
-		return 1 // OpLabelsList, OpProfile, unknown
-	}
+	return 1
 }
 
-// DefaultCapacity is the default token bucket capacity (Gmail's per-user quota).
-const DefaultCapacity = 250
+// DefaultCapacity is the token bucket capacity at the default request rate.
+const DefaultCapacity = 5.0
 
-// DefaultRefillRate is tokens per second at the default rate.
-const DefaultRefillRate = 250.0
+// DefaultRefillRate is requests per second at the default request rate.
+const DefaultRefillRate = 5.0
 
 const (
-	// defaultQPS is the baseline QPS used to calculate the scale factor.
+	// defaultQPS is the default request rate.
 	defaultQPS = 5.0
 
 	// throttleRecoveryFactor is the multiplier applied to the refill rate during throttle recovery.
@@ -92,18 +87,16 @@ func newRateLimiter(clk Clock, qps float64) *RateLimiter {
 		qps = MinQPS
 	}
 
-	scaleFactor := qps / defaultQPS
-	if scaleFactor > 1.0 {
-		scaleFactor = 1.0
+	capacity := qps
+	if capacity < 1.0 {
+		capacity = 1.0
 	}
-
-	refillRate := DefaultRefillRate * scaleFactor
 	return &RateLimiter{
 		clock:          clk,
-		tokens:         DefaultCapacity,
-		capacity:       DefaultCapacity,
-		refillRate:     refillRate,
-		baseRefillRate: refillRate,
+		tokens:         capacity,
+		capacity:       capacity,
+		refillRate:     qps,
+		baseRefillRate: qps,
 		lastRefill:     clk.Now(),
 	}
 }

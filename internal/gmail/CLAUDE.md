@@ -57,15 +57,13 @@ only place where logs about rate limiting appear; sync code stays quiet.
 
 ## Rate limit token bucket
 
-`RateLimiter` (`ratelimit.go`) models Gmail's per-user quota:
+`RateLimiter` (`ratelimit.go`) limits literal Gmail HTTP requests:
 
-- Capacity `DefaultCapacity = 250`, refill `DefaultRefillRate = 250.0`
-  units/sec at the maximum. `NewRateLimiter(qps)` scales the refill rate
-  down by `qps / 5.0` (clamped to 1.0). At the default `qps=5` you get
-  full 250/s; `qps=1` gives 50/s.
-- Operation costs (`Operation.Cost`): `messages.get/list/trash` = 5,
-  `delete` = 10, `batchDelete` = 50, `history.list` = 2, `labels.list`
-  and `profile` = 1. Match Gmail's published quota units.
+- `NewRateLimiter(qps)` uses `qps` as the refill rate and bucket capacity
+  (with a minimum capacity of one). At `qps=1`, one request is available
+  immediately and subsequent requests are spaced one second apart.
+- Every operation costs one token. This keeps the `rate_limit_qps`
+  configuration intuitive and independent of Google's quota-unit weights.
 - `Acquire(ctx, op)` blocks until enough tokens; respects ctx cancellation.
   `TryAcquire` is non-blocking.
 - `Throttle(d)`: hard pause until `now+d`, drains tokens, halves refill
@@ -95,8 +93,7 @@ bottom of the file — keep these for compile-time checks.
 
 - Don't add a new HTTP call without routing it through `Client.request`
   — the retry/throttle/auth wiring lives there.
-- Operation costs in `Operation.Cost` track the published Gmail quota.
-  When adding a new op, check the docs and add the case there too.
+- Every operation passed to the limiter costs one request token.
 - The `error` returned for 404 is `*NotFoundError`, not a wrapped
   `errors.New`. Callers check it with `errors.As`. Don't change the
   type without auditing every `errors.As(err, &nfe)` site.
