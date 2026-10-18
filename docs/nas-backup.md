@@ -248,6 +248,15 @@ That caused the 2026 outage:
 
 Both apps were published on 17–18 October 2026.
 
+A one-shot cron entry verifies this: `oauth-expiry-check.sh`, tagged
+`# msgvault-oauth-expiry-check (one-shot)`, runs at 09:37 on 25 October 2026.
+That is the first morning a Testing-mode token from the 18 October
+re-authorization could not have survived. The script checks that both mailboxes
+synced since 01:00 that day, posts PASS or FAIL to the usual alert channels, and
+then removes its own crontab line. The crontab from before this entry was added
+is saved as
+`~/.local/state/msgvault-backup/crontab.before-oauth-check-20261018`.
+
 Staying unverified is fine for personal use:
 
 - Sign-in shows a "Google hasn't verified this app" screen. Choose
